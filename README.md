@@ -34,16 +34,20 @@ brew tap ersel95/flightkit https://github.com/ersel95/FlightKit
 brew install --cask flightkit
 ```
 
-### DMG
+### DMG (any Mac)
 
-Download the latest `FlightKit-<version>.dmg` from
-[Releases](https://github.com/ersel95/FlightKit/releases), open it, and drag
-**FlightKit** to Applications.
+1. Open [**Releases**](https://github.com/ersel95/FlightKit/releases) and download
+   the latest `FlightKit-<version>.dmg`.
+2. Double‑click the `.dmg` to mount it.
+3. Drag **FlightKit** onto the **Applications** shortcut in the window.
+4. Eject the disk image and launch FlightKit from Applications (or Launchpad).
 
 > Release builds are **signed with a Developer ID and notarized by Apple**, so
-> they open without Gatekeeper warnings. (Builds you make yourself from source are
-> unsigned — clear the quarantine flag with
-> `xattr -dr com.apple.quarantine /Applications/FlightKit.app` if macOS blocks them.)
+> they launch on any Mac with **no Gatekeeper warning** — even offline (the
+> notarization ticket is stapled). Nothing extra to run.
+>
+> (Only builds you compile yourself from source are unsigned. If macOS ever blocks
+> one, clear the quarantine flag: `xattr -dr com.apple.quarantine /Applications/FlightKit.app`.)
 
 ## Usage
 
