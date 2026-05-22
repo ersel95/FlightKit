@@ -21,13 +21,21 @@ final class ProjectStore {
 
     private let fileURL: URL
 
-    init() {
+    /// `nonisolated` so SwiftUI can build it in a property initializer
+    /// (`@State private var store = ProjectStore()`) regardless of the App's
+    /// isolation. The disk read is inlined since the MainActor `load()` can't be
+    /// called from here; setting the isolated stored properties during init is allowed.
+    nonisolated init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "FlightKit", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        self.fileURL = support.appending(path: "projects.json")
-        load()
+        let url = support.appending(path: "projects.json")
+        self.fileURL = url
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([AppProject].self, from: data) {
+            self.projects = decoded
+        }
     }
 
     func load() {
