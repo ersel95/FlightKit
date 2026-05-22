@@ -8,28 +8,34 @@
 import SwiftUI
 import AppKit
 
-/// Add or edit an app in the catalog. Picks the build container directly
-/// (.xcworkspace / .xcodeproj) and captures scheme, team and one or more
-/// environments (each = a configuration + bundle id).
+/// Add or edit an app — a small wizard:
+///   1. **pick** the build container (.xcworkspace / .xcodeproj) — nothing else shown
+///   2. **inspecting** — auto-extract scheme, team and per-config environments
+///   3. **review** — the scan result, fully editable, then confirmed to save
+/// Editing an existing app jumps straight to review.
 struct ProjectEditorView: View {
     @Bindable var store: ProjectStore
     let existing: AppProject?
     /// Called with the saved project (or nil if cancelled).
     let onDone: (AppProject?) -> Void
 
+    private enum Phase { case pick, inspecting, review }
+
+    @State private var phase: Phase
     @State private var displayName: String
     @State private var containerPath: String
     @State private var schemeName: String
     @State private var teamId: String
     @State private var environments: [AppEnvironment]
-    @State private var error: String?
-    @State private var isInspecting = false
     @State private var availableSchemes: [String] = []
+    @State private var scanWarning: String?
+    @State private var error: String?
 
     init(store: ProjectStore, existing: AppProject?, onDone: @escaping (AppProject?) -> Void) {
         self.store = store
         self.existing = existing
         self.onDone = onDone
+        _phase = State(initialValue: existing == nil ? .pick : .review)
         _displayName = State(initialValue: existing?.displayName ?? "")
         _containerPath = State(initialValue: existing?.containerPath ?? "")
         _schemeName = State(initialValue: existing?.schemeName ?? "")
@@ -42,21 +48,101 @@ struct ProjectEditorView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            switch phase {
+            case .pick:       pickStep
+            case .inspecting: inspectingStep
+            case .review:     reviewStep
+            }
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack {
+            Text(existing == nil ? "Add app" : "Edit app").font(.title3.weight(.semibold))
+            Spacer()
+            Button("Cancel", role: .cancel) { onDone(nil) }.keyboardShortcut(.escape)
+            if phase == .review {
+                Button("Save") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isValid)
+            }
+        }
+        .padding(16)
+    }
+
+    // MARK: - Step 1: pick
+
+    private var pickStep: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 52, weight: .light))
+                .foregroundStyle(.tint)
+            Text("Choose the app to publish")
+                .font(.title3.weight(.semibold))
+            Text("Pick its .xcworkspace or .xcodeproj. FlightKit reads the scheme,\nconfigurations and bundle ids for you.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button { pickContainer() } label: {
+                Label("Choose project…", systemImage: "folder")
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    // MARK: - Step 2: inspecting
+
+    private var inspectingStep: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            ProgressView().controlSize(.large)
+            Text("Inspecting project…").font(.headline)
+            Text(URL(fileURLWithPath: containerPath).lastPathComponent)
+                .font(.callout.monospaced()).foregroundStyle(.secondary)
+            Text("Reading schemes, configurations and bundle ids. The first run may\nresolve Swift packages, which can take a moment.")
+                .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    // MARK: - Step 3: review
+
+    private var reviewStep: some View {
+        VStack(spacing: 0) {
             Form {
                 Section {
+                    LabeledContent("Project / workspace") {
+                        HStack {
+                            Text(URL(fileURLWithPath: containerPath).lastPathComponent)
+                                .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                            Button("Change…") { pickContainer() }.controlSize(.small)
+                        }
+                    }
                     TextField("Display name", text: $displayName)
-                    containerPicker
                     schemeField
                     TextField("Team ID", text: $teamId)
                         .help("Apple Developer Team ID (10 chars), e.g. ABCDE12345")
                 } header: {
                     Text("App")
                 } footer: {
-                    if isInspecting {
-                        Label("Inspecting project — reading schemes, configurations and bundle ids…", systemImage: "magnifyingglass")
-                            .font(.caption2)
+                    if let scanWarning {
+                        Label(scanWarning, systemImage: "exclamationmark.triangle")
+                            .font(.caption2).foregroundStyle(.orange)
                     } else {
-                        Text("Pick a project/workspace and the fields below auto-fill.").font(.caption2)
+                        Label("Auto-scanned — review and edit anything below before saving.", systemImage: "sparkles")
+                            .font(.caption2)
                     }
                 }
                 Section {
@@ -70,44 +156,16 @@ struct ProjectEditorView: View {
                         Label("Add environment", systemImage: "plus")
                     }
                 } header: {
-                    Text("Environments")
+                    Text("Environments (\(environments.count))")
                 } footer: {
-                    Text("Each environment is one build configuration + the bundle id it ships under. Add Test / UAT / Prod to publish them separately (or 'All' at once).")
+                    Text("Each environment is one build configuration + the bundle id it ships under. Add missing ones, fix wrong values, swipe to delete extras.")
                         .font(.caption2)
                 }
             }
             .formStyle(.grouped)
             if let error {
-                Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal)
+                Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
             }
-        }
-    }
-
-    private var header: some View {
-        HStack {
-            Text(existing == nil ? "Add app" : "Edit app").font(.title3.weight(.semibold))
-            Spacer()
-            Button("Cancel", role: .cancel) { onDone(nil) }.keyboardShortcut(.escape)
-            Button("Save") { save() }
-                .buttonStyle(.borderedProminent)
-                .disabled(!isValid || isInspecting)
-        }
-        .padding(16)
-    }
-
-    private var containerPicker: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Project / workspace").font(.caption).foregroundStyle(.secondary)
-                Text(containerPath.isEmpty ? "Not selected" : containerPath)
-                    .font(.caption.monospaced())
-                    .lineLimit(1).truncationMode(.middle)
-                    .foregroundStyle(containerPath.isEmpty ? .secondary : .primary)
-            }
-            Spacer()
-            if isInspecting { ProgressView().controlSize(.small) }
-            Button("Choose…") { pickContainer() }
-                .disabled(isInspecting)
         }
     }
 
@@ -140,6 +198,8 @@ struct ProjectEditorView: View {
         && environments.contains { !$0.name.trimmed.isEmpty && !$0.configuration.trimmed.isEmpty && !$0.bundleIdentifier.trimmed.isEmpty }
     }
 
+    // MARK: - Actions
+
     private func pickContainer() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -160,30 +220,33 @@ struct ProjectEditorView: View {
         }
         error = nil
         containerPath = url.path
+        phase = .inspecting
         Task { await runInspection(url) }
     }
 
     /// Auto-fill scheme, team and per-configuration environments by reading the
-    /// project with xcodebuild. Best-effort: on failure we keep a filename-based
-    /// default and let the user fill in the rest.
+    /// project with xcodebuild, then advance to review. Best-effort: on failure we
+    /// still show review (filename-based) with a warning so the user can fill in.
     @MainActor
     private func runInspection(_ url: URL) async {
-        isInspecting = true
-        defer { isInspecting = false }
         do {
             let result = try await ProjectInspector.inspect(containerURL: url)
             availableSchemes = result.schemes
             displayName = result.displayName
             schemeName = result.suggestedScheme
-            if !result.teamId.isEmpty { teamId = result.teamId }
+            teamId = result.teamId
             if !result.environments.isEmpty { environments = result.environments }
+            scanWarning = result.environments.isEmpty
+                ? "No build configurations were detected — add environments manually."
+                : nil
             error = nil
         } catch {
             availableSchemes = []
-            if displayName.trimmed.isEmpty { displayName = url.deletingPathExtension().lastPathComponent }
-            if schemeName.trimmed.isEmpty { schemeName = url.deletingPathExtension().lastPathComponent }
-            self.error = "Couldn't auto-read the project — fill the fields manually. (\(error.localizedDescription))"
+            displayName = url.deletingPathExtension().lastPathComponent
+            schemeName = url.deletingPathExtension().lastPathComponent
+            scanWarning = "Couldn't auto-read the project — fill the fields manually. (\(error.localizedDescription))"
         }
+        phase = .review
     }
 
     private func save() {
