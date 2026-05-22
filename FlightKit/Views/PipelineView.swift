@@ -172,7 +172,18 @@ private struct SelectableLogView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = NSTextView()
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = true
+        scroll.backgroundColor = NSColor.black.withAlphaComponent(0.85)
+
+        // A programmatically-built scrollable NSTextView needs the full resizable
+        // setup (frame + min/max size + vertical resizing + width autoresizing +
+        // a width-tracking container). Without it the text view stays zero-sized
+        // and lays its text out into nothing — the panel shows only the scroll
+        // view's background and the log looks "empty" regardless of appearance.
+        let contentSize = scroll.contentSize
+        let textView = NSTextView(frame: NSRect(origin: .zero, size: contentSize))
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = true
@@ -180,13 +191,15 @@ private struct SelectableLogView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
 
-        let scroll = NSScrollView()
         scroll.documentView = textView
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = true
-        scroll.backgroundColor = NSColor.black.withAlphaComponent(0.85)
         context.coordinator.textView = textView
         context.coordinator.scrollView = scroll
 
