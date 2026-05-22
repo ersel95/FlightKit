@@ -234,36 +234,57 @@ struct ProjectDetailView: View {
         .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
     }
 
+    private struct ASCState {
+        var latestTF: ASCBuild?
+        var latestLive: ASCAppStoreVersion?
+        var allEnvLatestBuilds: [String: Int] = [:]
+    }
+
     @MainActor
     private func reload() async {
         isLoading = true
         defer { isLoading = false }
-        local = try? await ProjectInspector.resolveBuildVersion(for: effectiveProject)
+        // Instant Keychain read first so the API-key button state is correct right away.
         credentials = try? KeychainStore.load(forProjectId: project.id)
         latestTF = nil
         latestLive = nil
         allEnvLatestBuilds = [:]
-        guard let credentials else {
-            suggestNext()
-            return
+
+        // The local read shells out to xcodebuild (which resolves SPM packages —
+        // slow on heavy projects). Run it concurrently with the ASC network calls
+        // so the spinner waits for max(local, network) instead of their sum.
+        async let localInfo = ProjectInspector.resolveBuildVersion(for: effectiveProject)
+
+        if let credentials {
+            let asc = await fetchASCState(credentials: credentials)
+            latestTF = asc.latestTF
+            latestLive = asc.latestLive
+            allEnvLatestBuilds = asc.allEnvLatestBuilds
         }
+        local = try? await localInfo
+        suggestNext()
+    }
+
+    @MainActor
+    private func fetchASCState(credentials: ASCCredentials) async -> ASCState {
         let api = ASCAPIClient(credentials: credentials)
+        var state = ASCState()
         if isAllSelected {
             // Sweep every target app so the suggested build number clears all of
             // them; show the last (Prod) env's TestFlight build for context.
             for env in targetEnvironments {
                 guard let app = try? await api.findApp(bundleId: env.bundleIdentifier) else { continue }
                 let build = try? await api.latestBuild(appId: app.id)
-                latestTF = build ?? latestTF
+                state.latestTF = build ?? state.latestTF
                 if let n = build.flatMap({ Int($0.preReleaseVersion) }) {
-                    allEnvLatestBuilds[env.name] = n
+                    state.allEnvLatestBuilds[env.name] = n
                 }
             }
         } else if let app = try? await api.findApp(bundleId: effectiveProject.bundleIdentifier) {
-            latestTF = try? await api.latestBuild(appId: app.id)
-            latestLive = try? await api.latestAppStoreVersion(appId: app.id)
+            state.latestTF = try? await api.latestBuild(appId: app.id)
+            state.latestLive = try? await api.latestAppStoreVersion(appId: app.id)
         }
-        suggestNext()
+        return state
     }
 
     private func suggestNext() {
