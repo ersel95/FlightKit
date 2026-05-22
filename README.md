@@ -40,12 +40,10 @@ Download the latest `FlightKit-<version>.dmg` from
 [Releases](https://github.com/ersel95/FlightKit/releases), open it, and drag
 **FlightKit** to Applications.
 
-> The app is distributed **unsigned** (ad‑hoc), so macOS Gatekeeper blocks it on
-> first launch. The simplest fix is to clear the quarantine flag:
-> `xattr -dr com.apple.quarantine /Applications/FlightKit.app`
-> (the Homebrew cask does this automatically). Alternatively, after the first
-> blocked launch open **System Settings → Privacy & Security** and click
-> **Open Anyway**. On older macOS, right‑click the app → **Open** also works.
+> Release builds are **signed with a Developer ID and notarized by Apple**, so
+> they open without Gatekeeper warnings. (Builds you make yourself from source are
+> unsigned — clear the quarantine flag with
+> `xattr -dr com.apple.quarantine /Applications/FlightKit.app` if macOS blocks them.)
 
 ## Usage
 

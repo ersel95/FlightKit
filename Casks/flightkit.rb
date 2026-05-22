@@ -9,13 +9,6 @@ cask "flightkit" do
 
   app "FlightKit.app"
 
-  # Unsigned build: clear the quarantine flag so Gatekeeper allows first launch.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/FlightKit.app"],
-                   sudo: false
-  end
-
   zap trash: [
     "~/Library/Application Support/FlightKit",
   ]
