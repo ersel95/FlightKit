@@ -12,8 +12,16 @@
 2. The Xcode project is **generated**, not committed. After adding/removing a
    Swift file, update `SOURCES` in `generate_pbxproj.py` and re-run it. The
    `.xcodeproj` is git-ignored.
-3. Keep it dependency-free (no SPM/CocoaPods) and macOS 14+ / Swift 5+.
-4. File headers: `// Created by Mr. t.`
+3. Keep it dependency-free (no SPM/CocoaPods) and macOS 14+.
+4. **Must compile clean under Swift 6 language mode.** The CI toolchain is stricter
+   than a local Xcode may be — verify locally before pushing a release tag:
+   `xcodebuild -project FlightKit.xcodeproj -scheme FlightKit -configuration Release -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=6 build`
+5. **SwiftUI view structs are `@MainActor`.** Every `View`/`NSViewRepresentable`
+   (and its Coordinator) is annotated `@MainActor` so helper methods can touch the
+   `@MainActor` models (`PipelineState`, `ProjectStore`). Without it the strict CI
+   compiler errors ("can not be referenced from a non-isolated context"). `FlightKitApp`
+   is `@MainActor` too, so `@State = ProjectStore()` builds.
+6. File headers: `// Created by Mr. t.`
 
 ## Layout
 
@@ -33,8 +41,9 @@ FlightKit/
 ├── Resources/Assets.xcassets
 └── FlightKit.entitlements
 generate_pbxproj.py             project generator (source of truth for the target)
-scripts/                        build-app.sh, build-dmg.sh
-.github/workflows/release.yml   tag v* -> DMG + Release + cask bump
+scripts/                        build-app.sh (unsigned), build-dmg.sh (local unsigned),
+                                release-dmg.sh (sign + notarize + staple, used by CI)
+.github/workflows/release.yml   tag v* -> sign + notarize + Release + cask bump
 Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
 ```
 
@@ -72,13 +81,29 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   errors.
 - Export must pass the API key (`-authenticationKey*` + `-allowProvisioningUpdates`)
   so signing works without a local Apple ID. Cloud cert creation needs Admin role.
+- `writeXcconfig` is **best-effort**: many projects keep the version in build
+  settings, not `.xcconfig`. Never make it fatal — the archive injects
+  `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` as command-line overrides anyway.
 - The log view is an `NSTextView` (`SelectableLogView`) for full selection and
   performant streaming; tail-follow uses `didLiveScroll` (user scroll only).
+- `ProjectStore.init` is a normal (`@MainActor`) init; do **not** make it
+  `nonisolated` — a nonisolated init can't assign the `@MainActor` `projects`.
+  `FlightKitApp` being `@MainActor` is what lets `@State = ProjectStore()` build.
 
 ## Build / release
 
 ```sh
-python3 generate_pbxproj.py && open FlightKit.xcodeproj
-scripts/build-dmg.sh 1.0.0
-git tag v1.0.0 && git push origin v1.0.0   # CI builds DMG + release + cask
+python3 generate_pbxproj.py && open FlightKit.xcodeproj     # dev
+scripts/build-dmg.sh 1.0.0                                  # local UNSIGNED dmg
+git tag v1.0.0 && git push origin v1.0.0                    # CI: sign+notarize+release
 ```
+
+Release builds are **Developer ID signed + notarized + stapled** (app and DMG).
+CI (`release.yml`) needs these repo **secrets** (already configured):
+`DEVELOPER_ID_CERT_P12_BASE64`, `DEVELOPER_ID_CERT_PASSWORD`, `SIGNING_IDENTITY`,
+`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64`. The notarization ASC key must
+belong to the **same team** as the signing cert. `scripts/release-dmg.sh` runs the
+sign → notarytool → staple → DMG flow and is invoked by the workflow.
+
+Distribution: GitHub Releases (`FlightKit-<v>.dmg`) and `brew install --cask flightkit`
+(tap `ersel95/flightkit`). v1.0.0 shipped & verified notarized (2026-05-22).
