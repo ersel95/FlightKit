@@ -91,8 +91,8 @@ final class PublishOrchestrator {
                     derivedDataDir: derivedDataDir,
                     exportOptionsURL: exportOptionsURL,
                     archiveURL: archiveURL,
-                    appendLog: { [weak self] msg in
-                        Task { @MainActor in self?.state.appendLog(msg, kind: .fix) }
+                    appendLog: { [state] msg in
+                        Task { @MainActor in state.appendLog(msg, kind: .fix) }
                     }
                 )
                 if let healed = await healer.attemptFix(stage: step.rawValue, log: logSnapshot, context: context),

@@ -250,6 +250,7 @@ private struct SelectableLogView: NSViewRepresentable {
         }
     }
 
+    @MainActor
     final class Coordinator {
         var parent: SelectableLogView
         var textView: NSTextView?
@@ -259,18 +260,14 @@ private struct SelectableLogView: NSViewRepresentable {
 
         init(_ parent: SelectableLogView) { self.parent = parent }
 
-        deinit { NotificationCenter.default.removeObserver(self) }
-
+        // AppKit delivers live-scroll notifications on the main thread, so the
+        // @MainActor selector touches the (MainActor) binding safely.
         @objc func userDidLiveScroll() {
-            // AppKit delivers live-scroll notifications on the main thread, so it's
-            // safe to assume MainActor isolation to touch the (MainActor) binding.
-            MainActor.assumeIsolated {
-                guard let scroll = scrollView else { return }
-                let atBottom = SelectableLogView.isScrolledToBottom(scroll)
-                // Scrolling up disarms following; scrolling back to the bottom re-arms it.
-                if parent.isFollowing != atBottom {
-                    parent.isFollowing = atBottom
-                }
+            guard let scroll = scrollView else { return }
+            let atBottom = SelectableLogView.isScrolledToBottom(scroll)
+            // Scrolling up disarms following; scrolling back to the bottom re-arms it.
+            if parent.isFollowing != atBottom {
+                parent.isFollowing = atBottom
             }
         }
     }

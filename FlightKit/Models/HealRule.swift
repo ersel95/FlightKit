@@ -7,8 +7,8 @@
 
 import Foundation
 
-struct HealRule: Identifiable {
-    enum Trigger {
+struct HealRule: Identifiable, Sendable {
+    enum Trigger: Sendable {
         case stageAndPattern(stage: String, regex: String)
     }
 
@@ -26,7 +26,7 @@ struct HealRule: Identifiable {
     }
 }
 
-struct HealContext {
+struct HealContext: Sendable {
     let project: AppProject
     let workspaceRoot: URL
     let derivedDataDir: URL
