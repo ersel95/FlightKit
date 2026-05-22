@@ -132,14 +132,24 @@ final class PublishOrchestrator {
         state.appendLog("Target version: \(state.targetVersion) (\(state.targetBuildNumber))", kind: .info)
     }
 
+    /// Best-effort: persist the version bump into the project's `.xcconfig` files.
+    /// Many projects keep MARKETING_VERSION / CURRENT_PROJECT_VERSION in the target
+    /// build settings (pbxproj) instead, where there is no field to edit — that's
+    /// fine: the archive step injects both as command-line build-setting overrides,
+    /// so the build always carries the right version regardless of this step.
     private func writeXcconfig() async throws {
-        let searchRoot = workspaceRoot
-        let mvFile = try XcconfigEditor.findFile(field: "MARKETING_VERSION", searchRoot: searchRoot, configurationName: project.configuration)
-        let bnFile = try XcconfigEditor.findFile(field: "CURRENT_PROJECT_VERSION", searchRoot: searchRoot, configurationName: project.configuration)
-        try XcconfigEditor.setValue(state.targetVersion, forField: "MARKETING_VERSION", in: mvFile)
-        try XcconfigEditor.setValue(state.targetBuildNumber, forField: "CURRENT_PROJECT_VERSION", in: bnFile)
-        state.appendLog("MARKETING_VERSION → \(mvFile.lastPathComponent)", kind: .info)
-        state.appendLog("CURRENT_PROJECT_VERSION → \(bnFile.lastPathComponent)", kind: .info)
+        bumpXcconfig(field: "MARKETING_VERSION", to: state.targetVersion)
+        bumpXcconfig(field: "CURRENT_PROJECT_VERSION", to: state.targetBuildNumber)
+    }
+
+    private func bumpXcconfig(field: String, to value: String) {
+        do {
+            let file = try XcconfigEditor.findFile(field: field, searchRoot: workspaceRoot, configurationName: project.configuration)
+            try XcconfigEditor.setValue(value, forField: field, in: file)
+            state.appendLog("\(field) → \(file.lastPathComponent)", kind: .info)
+        } catch {
+            state.appendLog("\(field): no .xcconfig field found — applied via build-setting override at archive instead.", kind: .info)
+        }
     }
 
     private func writeExportOptions() async throws {

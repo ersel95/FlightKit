@@ -34,13 +34,15 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           SHA="${{ steps.sum.outputs.sha256 }}"
+          # Update the cask on main (the build ran from a detached tag checkout).
+          git fetch origin main
+          git checkout main
           sed -i '' -E "s/version \".*\"/version \"$VERSION\"/" Casks/flightkit.rb
           sed -i '' -E "s/sha256 \".*\"/sha256 \"$SHA\"/" Casks/flightkit.rb
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/flightkit.rb
-          git commit -m "chore: cask -> $VERSION" || echo "no cask change"
-          git push origin HEAD:${GITHUB_REF_NAME%%/*} || git push origin HEAD:main || true
+          git commit -m "chore: cask -> $VERSION" && git push origin main || echo "no cask change"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
