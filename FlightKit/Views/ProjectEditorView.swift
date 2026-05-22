@@ -23,6 +23,8 @@ struct ProjectEditorView: View {
     @State private var teamId: String
     @State private var environments: [AppEnvironment]
     @State private var error: String?
+    @State private var isInspecting = false
+    @State private var availableSchemes: [String] = []
 
     init(store: ProjectStore, existing: AppProject?, onDone: @escaping (AppProject?) -> Void) {
         self.store = store
@@ -41,12 +43,21 @@ struct ProjectEditorView: View {
             header
             Divider()
             Form {
-                Section("App") {
+                Section {
                     TextField("Display name", text: $displayName)
                     containerPicker
-                    TextField("Scheme", text: $schemeName)
+                    schemeField
                     TextField("Team ID", text: $teamId)
                         .help("Apple Developer Team ID (10 chars), e.g. ABCDE12345")
+                } header: {
+                    Text("App")
+                } footer: {
+                    if isInspecting {
+                        Label("Inspecting project — reading schemes, configurations and bundle ids…", systemImage: "magnifyingglass")
+                            .font(.caption2)
+                    } else {
+                        Text("Pick a project/workspace and the fields below auto-fill.").font(.caption2)
+                    }
                 }
                 Section {
                     ForEach($environments) { $env in
@@ -79,7 +90,7 @@ struct ProjectEditorView: View {
             Button("Cancel", role: .cancel) { onDone(nil) }.keyboardShortcut(.escape)
             Button("Save") { save() }
                 .buttonStyle(.borderedProminent)
-                .disabled(!isValid)
+                .disabled(!isValid || isInspecting)
         }
         .padding(16)
     }
@@ -94,7 +105,20 @@ struct ProjectEditorView: View {
                     .foregroundStyle(containerPath.isEmpty ? .secondary : .primary)
             }
             Spacer()
+            if isInspecting { ProgressView().controlSize(.small) }
             Button("Choose…") { pickContainer() }
+                .disabled(isInspecting)
+        }
+    }
+
+    @ViewBuilder
+    private var schemeField: some View {
+        if availableSchemes.count > 1 {
+            Picker("Scheme", selection: $schemeName) {
+                ForEach(availableSchemes, id: \.self) { Text($0).tag($0) }
+            }
+        } else {
+            TextField("Scheme", text: $schemeName)
         }
     }
 
@@ -136,11 +160,29 @@ struct ProjectEditorView: View {
         }
         error = nil
         containerPath = url.path
-        if displayName.trimmed.isEmpty {
-            displayName = url.deletingPathExtension().lastPathComponent
-        }
-        if schemeName.trimmed.isEmpty {
-            schemeName = url.deletingPathExtension().lastPathComponent
+        Task { await runInspection(url) }
+    }
+
+    /// Auto-fill scheme, team and per-configuration environments by reading the
+    /// project with xcodebuild. Best-effort: on failure we keep a filename-based
+    /// default and let the user fill in the rest.
+    @MainActor
+    private func runInspection(_ url: URL) async {
+        isInspecting = true
+        defer { isInspecting = false }
+        do {
+            let result = try await ProjectInspector.inspect(containerURL: url)
+            availableSchemes = result.schemes
+            displayName = result.displayName
+            schemeName = result.suggestedScheme
+            if !result.teamId.isEmpty { teamId = result.teamId }
+            if !result.environments.isEmpty { environments = result.environments }
+            error = nil
+        } catch {
+            availableSchemes = []
+            if displayName.trimmed.isEmpty { displayName = url.deletingPathExtension().lastPathComponent }
+            if schemeName.trimmed.isEmpty { schemeName = url.deletingPathExtension().lastPathComponent }
+            self.error = "Couldn't auto-read the project — fill the fields manually. (\(error.localizedDescription))"
         }
     }
 

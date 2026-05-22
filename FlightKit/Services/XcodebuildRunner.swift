@@ -83,17 +83,20 @@ enum XcodebuildRunner {
 
     /// Run `xcodebuild -showBuildSettings -json` and return parsed dictionary.
     /// `containerArguments` is the `-workspace`/`-project` pair so build settings
-    /// are read from the same container that will be archived.
-    static func showBuildSettings(containerArguments: [String], scheme: String, configuration: String) async throws -> [String: String] {
-        let result = try await run(
-            args: containerArguments + [
-                "-scheme", scheme,
-                "-configuration", configuration,
-                "-showBuildSettings",
-                "-json",
-            ],
-            onLine: { _, _ in }
-        )
+    /// are read from the same container that will be archived. A nil `configuration`
+    /// lets xcodebuild use the scheme's default. `clonedSourcePackagesPath` reuses a
+    /// shared SPM checkout cache so resolution isn't repeated per call.
+    static func showBuildSettings(
+        containerArguments: [String],
+        scheme: String,
+        configuration: String?,
+        clonedSourcePackagesPath: String? = nil
+    ) async throws -> [String: String] {
+        var args = containerArguments + ["-scheme", scheme]
+        if let configuration { args += ["-configuration", configuration] }
+        if let clonedSourcePackagesPath { args += ["-clonedSourcePackagesDirPath", clonedSourcePackagesPath] }
+        args += ["-showBuildSettings", "-json"]
+        let result = try await run(args: args, onLine: { _, _ in })
         guard result.exitCode == 0 else {
             throw PublishError.xcodebuildFailed(stage: "showBuildSettings", exitCode: result.exitCode, log: result.combinedLog)
         }
@@ -107,6 +110,41 @@ enum XcodebuildRunner {
         }
         let entries = try JSONDecoder().decode([Entry].self, from: data)
         return entries.first?.buildSettings ?? [:]
+    }
+
+    struct ProjectListing {
+        let schemes: [String]
+        let configurations: [String]
+    }
+
+    /// Run `xcodebuild -list -json`. Schemes are reported for both projects and
+    /// workspaces; build configurations only for projects (a workspace's configs
+    /// live in its member projects).
+    static func list(containerArguments: [String], clonedSourcePackagesPath: String? = nil) async throws -> ProjectListing {
+        var args = containerArguments + ["-list", "-json"]
+        if let clonedSourcePackagesPath { args += ["-clonedSourcePackagesDirPath", clonedSourcePackagesPath] }
+        let result = try await run(args: args, onLine: { _, _ in })
+        guard result.exitCode == 0 else {
+            throw PublishError.xcodebuildFailed(stage: "list", exitCode: result.exitCode, log: result.combinedLog)
+        }
+        let jsonStart = result.combinedLog.firstIndex(of: "{") ?? result.combinedLog.startIndex
+        guard let data = String(result.combinedLog[jsonStart...]).data(using: .utf8) else {
+            throw PublishError.xcodebuildFailed(stage: "list", exitCode: 0, log: "Failed to encode -list output")
+        }
+        struct Envelope: Decodable {
+            struct Container: Decodable {
+                let schemes: [String]?
+                let configurations: [String]?
+            }
+            let project: Container?
+            let workspace: Container?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        let container = env.project ?? env.workspace
+        return ProjectListing(
+            schemes: container?.schemes ?? [],
+            configurations: container?.configurations ?? []
+        )
     }
 }
 
