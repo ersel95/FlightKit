@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 
+@MainActor
 struct PipelineView: View {
     @Bindable var batch: PipelineBatch
     @State private var shownIndex: Int = 0
@@ -261,11 +262,15 @@ private struct SelectableLogView: NSViewRepresentable {
         deinit { NotificationCenter.default.removeObserver(self) }
 
         @objc func userDidLiveScroll() {
-            guard let scroll = scrollView else { return }
-            let atBottom = SelectableLogView.isScrolledToBottom(scroll)
-            // Scrolling up disarms following; scrolling back to the bottom re-arms it.
-            if parent.isFollowing != atBottom {
-                parent.isFollowing = atBottom
+            // AppKit delivers live-scroll notifications on the main thread, so it's
+            // safe to assume MainActor isolation to touch the (MainActor) binding.
+            MainActor.assumeIsolated {
+                guard let scroll = scrollView else { return }
+                let atBottom = SelectableLogView.isScrolledToBottom(scroll)
+                // Scrolling up disarms following; scrolling back to the bottom re-arms it.
+                if parent.isFollowing != atBottom {
+                    parent.isFollowing = atBottom
+                }
             }
         }
     }
@@ -322,6 +327,7 @@ private struct StepRow: View {
 /// Post-run summary: per environment, what we submitted vs what App Store Connect
 /// actually recorded. Surfaces the store renumbering the build (the number we sent
 /// already existed) so "1.0.0 (1)" landing as "1.0.0 (2)" is never a silent surprise.
+@MainActor
 struct PipelineReportView: View {
     let batch: PipelineBatch
     let onClose: () -> Void
