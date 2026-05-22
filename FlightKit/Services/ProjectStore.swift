@@ -14,33 +14,20 @@ import Observation
 @MainActor
 @Observable
 final class ProjectStore {
-    // No default value: a nonisolated init can *initialize* this isolated property
-    // exactly once, but reassigning a defaulted value counts as a mutation (which
-    // a nonisolated init isn't allowed to do on a @MainActor property).
-    private(set) var projects: [AppProject]
+    private(set) var projects: [AppProject] = []
     /// Bumped whenever a project's API key is saved/deleted. Views that show a
     /// credential indicator (the sidebar) read this so they re-check the Keychain.
     private(set) var credentialsRevision = 0
 
     private let fileURL: URL
 
-    /// `nonisolated` so SwiftUI can build it in a property initializer
-    /// (`@State private var store = ProjectStore()`) regardless of the App's
-    /// isolation. The disk read is inlined since the MainActor `load()` can't be
-    /// called from here; setting the isolated stored properties during init is allowed.
-    nonisolated init() {
+    init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "FlightKit", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let url = support.appending(path: "projects.json")
-        self.fileURL = url
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([AppProject].self, from: data) {
-            self.projects = decoded
-        } else {
-            self.projects = []
-        }
+        self.fileURL = support.appending(path: "projects.json")
+        load()
     }
 
     func load() {

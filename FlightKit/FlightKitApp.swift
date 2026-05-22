@@ -8,6 +8,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct FlightKitApp: App {
     @State private var store = ProjectStore()
 
