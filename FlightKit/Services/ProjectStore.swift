@@ -15,6 +15,9 @@ import Observation
 @Observable
 final class ProjectStore {
     private(set) var projects: [AppProject] = []
+    /// Bumped whenever a project's API key is saved/deleted. Views that show a
+    /// credential indicator (the sidebar) read this so they re-check the Keychain.
+    private(set) var credentialsRevision = 0
 
     private let fileURL: URL
 
@@ -34,6 +37,11 @@ final class ProjectStore {
             return
         }
         projects = decoded
+    }
+
+    /// Call after saving/deleting an API key so credential indicators refresh.
+    func credentialsChanged() {
+        credentialsRevision += 1
     }
 
     func add(_ project: AppProject) {

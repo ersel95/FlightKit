@@ -18,7 +18,7 @@ struct ProjectListView: View {
     var body: some View {
         List(selection: $selectionID) {
             ForEach(store.projects) { project in
-                ProjectRow(project: project)
+                ProjectRow(project: project, store: store)
                     .tag(project.id)
                     .contextMenu {
                         Button("Edit…") { onEdit(project) }
@@ -44,11 +44,17 @@ struct ProjectListView: View {
 
 private struct ProjectRow: View {
     let project: AppProject
+    let store: ProjectStore
 
-    @State private var hasCredentials = false
+    /// Read synchronously each render. Reading `store.credentialsRevision` below
+    /// registers a dependency so saving/deleting an API key refreshes this row.
+    private var hasCredentials: Bool {
+        (try? KeychainStore.load(forProjectId: project.id)) != nil
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        _ = store.credentialsRevision // observe: re-evaluate when credentials change
+        return VStack(alignment: .leading, spacing: 4) {
             Text(project.displayName).font(.headline)
             Text(project.bundleIdentifier)
                 .font(.caption).foregroundStyle(.secondary)
@@ -64,8 +70,5 @@ private struct ProjectRow: View {
             }
         }
         .padding(.vertical, 4)
-        .task(id: project.id) {
-            hasCredentials = (try? KeychainStore.load(forProjectId: project.id)) != nil
-        }
     }
 }

@@ -27,7 +27,7 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 280, ideal: 320)
         } detail: {
             if let project = selectedProject {
-                ProjectDetailView(project: project)
+                ProjectDetailView(project: project, store: store)
                     .id(project.id)
             } else {
                 emptyDetail

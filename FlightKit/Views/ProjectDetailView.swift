@@ -17,6 +17,7 @@ enum EnvironmentSelection: Hashable {
 
 struct ProjectDetailView: View {
     let project: AppProject
+    let store: ProjectStore
 
     @State private var destination: DistributionTarget = .testFlight
     @State private var local: BuildVersionInfo?
@@ -83,6 +84,7 @@ struct ProjectDetailView: View {
         .sheet(isPresented: $showCredentialsSheet) {
             CredentialsEditor(project: project) {
                 showCredentialsSheet = false
+                store.credentialsChanged() // refresh the sidebar "API key" indicator
                 Task { await reload() }
             }
         }
