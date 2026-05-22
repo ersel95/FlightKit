@@ -9,6 +9,7 @@ import SwiftUI
 
 /// Sidebar list of the user's apps. Add / edit / delete are surfaced here; the
 /// catalog itself lives in `ProjectStore` (Application Support).
+@MainActor
 struct ProjectListView: View {
     @Bindable var store: ProjectStore
     @Binding var selectionID: String?
@@ -42,6 +43,7 @@ struct ProjectListView: View {
     }
 }
 
+@MainActor
 private struct ProjectRow: View {
     let project: AppProject
     let store: ProjectStore

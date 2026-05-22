@@ -15,6 +15,7 @@ enum EnvironmentSelection: Hashable {
     case all
 }
 
+@MainActor
 struct ProjectDetailView: View {
     let project: AppProject
     let store: ProjectStore

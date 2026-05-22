@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 
+@MainActor
 struct CredentialsEditor: View {
     let project: AppProject
     let onClose: () -> Void

@@ -13,6 +13,7 @@ import AppKit
 ///   2. **inspecting** — auto-extract scheme, team and per-config environments
 ///   3. **review** — the scan result, fully editable, then confirmed to save
 /// Editing an existing app jumps straight to review.
+@MainActor
 struct ProjectEditorView: View {
     @Bindable var store: ProjectStore
     let existing: AppProject?

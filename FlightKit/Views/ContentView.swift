@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+@MainActor
 struct ContentView: View {
     @Bindable var store: ProjectStore
     @State private var selectionID: String?
