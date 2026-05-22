@@ -14,7 +14,10 @@ import Observation
 @MainActor
 @Observable
 final class ProjectStore {
-    private(set) var projects: [AppProject] = []
+    // No default value: a nonisolated init can *initialize* this isolated property
+    // exactly once, but reassigning a defaulted value counts as a mutation (which
+    // a nonisolated init isn't allowed to do on a @MainActor property).
+    private(set) var projects: [AppProject]
     /// Bumped whenever a project's API key is saved/deleted. Views that show a
     /// credential indicator (the sidebar) read this so they re-check the Keychain.
     private(set) var credentialsRevision = 0
@@ -35,6 +38,8 @@ final class ProjectStore {
         if let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder().decode([AppProject].self, from: data) {
             self.projects = decoded
+        } else {
+            self.projects = []
         }
     }
 
