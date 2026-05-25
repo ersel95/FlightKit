@@ -66,8 +66,12 @@ jobs:
           curl -fsSL -o sparkle.tar.xz \
             https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz
           mkdir -p sparkle-tools && tar -xf sparkle.tar.xz -C sparkle-tools
+          # Pass the key via a file (the -s flag is deprecated and now errors).
+          KEYFILE="$RUNNER_TEMP/sparkle_ed_key"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$KEYFILE"
           # Outputs: sparkle:edSignature="..." length="..."
-          OUT="$(sparkle-tools/bin/sign_update "$DMG" -s "$SPARKLE_ED_PRIVATE_KEY")"
+          OUT="$(sparkle-tools/bin/sign_update "$DMG" --ed-key-file "$KEYFILE")"
+          rm -f "$KEYFILE"
           SIG="$(printf '%s' "$OUT" | sed -E 's/.*edSignature="([^"]+)".*/\1/')"
           LEN="$(printf '%s' "$OUT" | sed -E 's/.*length="([^"]+)".*/\1/')"
           {
