@@ -27,7 +27,13 @@ final class PipelineState {
     /// from `targetVersion`/`targetBuildNumber` if the store renumbered the build.
     var publishedMarketingVersion: String?
     var publishedBuildNumber: String?
+    /// The raw ASC processing state ("PROCESSING", "VALID", …) from the last poll.
     var processingStateText: String?
+    /// High-level lifecycle of the post-upload, non-blocking processing watch.
+    /// The blocking pipeline ends at `upload`; this tracks what happens afterwards
+    /// (ASC processing and, for App Store, the automatic version attach) while the
+    /// pipeline screen stays open.
+    var processingPhase: ProcessingPhase = .idle
 
     /// True once ASC reports a build number different from the one we submitted.
     var buildNumberWasRenumbered: Bool {
@@ -78,10 +84,54 @@ final class PipelineBatch: Identifiable {
     let id = UUID()
     let states: [PipelineState]
     var activeIndex: Int = 0
+    /// True once every environment's *blocking* pipeline (through upload) has run.
+    /// Processing watches may still be polling in the background after this flips.
     var isFinished: Bool = false
+
+    /// Background processing watches, one per uploaded environment. They run
+    /// independently (so no environment waits on another's processing) and are
+    /// cancelled when the pipeline screen closes.
+    private var processingTasks: [Task<Void, Never>] = []
 
     init(states: [PipelineState]) {
         self.states = states
+    }
+
+    func trackProcessingWatch(_ task: Task<Void, Never>) {
+        processingTasks.append(task)
+    }
+
+    /// Stops all in-flight processing watches — called when the screen closes,
+    /// since the watch only runs "while the screen stays open".
+    func cancelProcessingWatches() {
+        for task in processingTasks { task.cancel() }
+        processingTasks.removeAll()
+    }
+}
+
+/// Lifecycle of the background processing watch that runs after `upload`.
+enum ProcessingPhase: Equatable {
+    /// Upload not yet reached / watch not started.
+    case idle
+    /// Polling App Store Connect for the build to finish processing.
+    case waiting
+    /// Build processed successfully (TestFlight-ready). Terminal for TestFlight.
+    case valid
+    /// App Store only: attaching the processed build to an App Store version.
+    case attaching
+    /// App Store only: build attached to the named version (not submitted).
+    case attached(version: String)
+    /// Processing or attach failed / timed out.
+    case failed(reason: String)
+    /// Watch was stopped before completing (pipeline screen closed).
+    case stopped
+
+    /// No further work will happen on its own — `valid`/`attached`/`failed`.
+    var isTerminal: Bool {
+        switch self {
+        case .valid, .attached, .failed: return true
+        case .idle, .waiting, .attaching, .stopped: return false
+        }
     }
 }
 

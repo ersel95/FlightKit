@@ -58,15 +58,32 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   `applying(env)` pins the effective configuration/bundle id.
 - **Credentials**: `ASCCredentials` (Key ID, Issuer ID, `.p8` PEM) in the Keychain,
   keyed on `project.id`. The ASC API key is account-scoped (serves all app records).
-- **Pipeline**: `PublishOrchestrator` runs `PipelineState.steps` for the chosen
-  `DistributionTarget`: validate → write xcconfig → exportOptions → archive →
-  export (API-key/`-allowProvisioningUpdates` signing) → altool upload → wait for
-  processing → (App Store only) attach build to an editable App Store version.
-  `SelfHealer` retries known failures. A `PipelineBatch` runs envs sequentially
-  for the "All" sweep, stopping on first failure.
-- **App Store destination** = TestFlight upload **plus** attaching the processed
-  build to an App Store version (created if missing). **Never auto-submits** for
-  review.
+- **Pipeline**: `PublishOrchestrator` runs `PipelineState.steps` (the *blocking*
+  steps) for the chosen `DistributionTarget`: validate → write xcconfig →
+  exportOptions → archive → export (API-key/`-allowProvisioningUpdates` signing) →
+  altool upload. **The pipeline ends at upload.** ASC processing — and, for App
+  Store, the version attach — runs *afterwards* as a non-blocking background watch
+  (`runProcessingWatch`), so a multi-env sweep never waits up to 30 min per env on
+  another's processing. `SelfHealer` retries known failures.
+- **Processing watch**: `PipelineState.processingPhase` (`ProcessingPhase`: idle →
+  waiting → valid → (App Store) attaching → attached / failed / stopped) tracks the
+  post-upload work. Started per env by the batch runner; **only runs while the
+  pipeline screen is open** — `PipelineView.onDisappear` cancels the watches
+  (`PipelineBatch.cancelProcessingWatches`), flipping any in-flight watch to
+  `.stopped`. The live status shows in the steps panel and the report.
+- **Environment selection**: a multi-select chip picker (any subset, e.g. Test +
+  Prod) — there is no "All" button. `targetEnvironments` filters
+  `resolvedEnvironments` by the ticked names (single-env projects always publish
+  their one env). The picked subset **and** destination are remembered per project
+  across launches in `UserDefaults` (`FlightKit.envSelection.<id>` /
+  `FlightKit.destination.<id>`), restored in `ProjectDetailView.restoreSelection`.
+- **App Store destination** = TestFlight upload **plus** auto-attaching the
+  processed build to an App Store version (created if missing) once processing
+  reaches VALID — done in the background watch, so it only completes if the screen
+  stays open until processing finishes. **Never auto-submits** for review.
+- **Batch**: a `PipelineBatch` runs the picked envs' blocking pipelines
+  sequentially, stopping on first failure; each successful upload then spawns an
+  independent processing watch.
 - **Report**: `PipelineReportView` shows submitted vs ASC-recorded version,
   flagging a store renumber.
 

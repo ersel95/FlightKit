@@ -8,13 +8,6 @@
 import SwiftUI
 import AppKit
 
-/// What the environment picker is pointed at: a single environment, or the
-/// "All" sweep that publishes every environment in declaration order.
-enum EnvironmentSelection: Hashable {
-    case single(AppEnvironment)
-    case all
-}
-
 @MainActor
 struct ProjectDetailView: View {
     let project: AppProject
@@ -31,22 +24,25 @@ struct ProjectDetailView: View {
     @State private var buildNumber: String = ""
     @State private var showCredentialsSheet = false
     @State private var pipelineBatch: PipelineBatch?
-    @State private var selection: EnvironmentSelection?
-    /// Latest build number seen per environment (by env name) — used in "All"
-    /// mode to suggest a build number safe across every target app at once.
+    /// The environments the user has ticked, by name. Any subset is allowed
+    /// (e.g. Test + Prod, or Test + UAT). Persisted per project across launches.
+    @State private var selectedEnvNames: Set<String> = []
+    /// Latest build number seen per environment (by env name) — used when more
+    /// than one environment is targeted to suggest a build number safe across
+    /// every target app at once.
     @State private var allEnvLatestBuilds: [String: Int] = [:]
 
-    private var isAllSelected: Bool { selection == .all }
-
-    /// Environments this run will publish to, in order. `.all` → every declared
-    /// environment (Test → UAT → Prod); `.single` → just that one.
+    /// Environments this run will publish to, in declaration order. A project
+    /// with a single environment always publishes it (no picker shown); a
+    /// multi-environment project publishes the ticked subset.
     private var targetEnvironments: [AppEnvironment] {
-        switch selection {
-        case .all: return project.resolvedEnvironments
-        case .single(let env): return [env]
-        case .none: return Array(project.resolvedEnvironments.prefix(1))
-        }
+        let all = project.resolvedEnvironments
+        guard all.count > 1 else { return all }
+        return all.filter { selectedEnvNames.contains($0.name) }
     }
+
+    /// True when the run sweeps more than one environment back-to-back.
+    private var isMultiTarget: Bool { targetEnvironments.count > 1 }
 
     /// The project pinned to the environment used for the "Current state" cards
     /// and ASC lookups. In `.all` mode this is the first environment; the cards
@@ -70,17 +66,20 @@ struct ProjectDetailView: View {
             }
         }
         .task(id: project.id) {
-            // Reset selection when navigating between projects.
-            if !isSelectionValid {
-                selection = project.resolvedEnvironments.first.map(EnvironmentSelection.single)
-            }
+            // Restore this project's remembered environment + destination picks,
+            // pruned to environments that still exist.
+            restoreSelection()
             await reload()
         }
-        .onChange(of: selection) {
+        .onChange(of: selectedEnvNames) {
+            persistSelection()
             // Version, TestFlight build and live state all differ per bundle id.
             marketingVersion = ""
             buildNumber = ""
             Task { await reload() }
+        }
+        .onChange(of: destination) {
+            persistSelection()
         }
         .sheet(isPresented: $showCredentialsSheet) {
             CredentialsEditor(project: project) {
@@ -95,14 +94,32 @@ struct ProjectDetailView: View {
         }
     }
 
-    /// Whether the current `selection` still refers to something valid for this
-    /// project (guards against a stale single-env selection after navigation).
-    private var isSelectionValid: Bool {
-        switch selection {
-        case .single(let env): return project.resolvedEnvironments.contains(env)
-        case .all: return project.resolvedEnvironments.count > 1
-        case .none: return false
+    // MARK: - Per-project remembered selection
+
+    private var envSelectionDefaultsKey: String { "FlightKit.envSelection.\(project.id)" }
+    private var destinationDefaultsKey: String { "FlightKit.destination.\(project.id)" }
+
+    /// Loads the remembered environment subset + destination for this project,
+    /// dropping any environment names that no longer exist. Falls back to the
+    /// first environment when nothing valid is remembered.
+    private func restoreSelection() {
+        let existing = Set(project.resolvedEnvironments.map(\.name))
+        let saved = (UserDefaults.standard.array(forKey: envSelectionDefaultsKey) as? [String]) ?? []
+        var restored = Set(saved).intersection(existing)
+        if restored.isEmpty, let first = project.resolvedEnvironments.first {
+            restored = [first.name]
         }
+        selectedEnvNames = restored
+
+        if let raw = UserDefaults.standard.string(forKey: destinationDefaultsKey),
+           let saved = DistributionTarget(rawValue: raw) {
+            destination = saved
+        }
+    }
+
+    private func persistSelection() {
+        UserDefaults.standard.set(Array(selectedEnvNames), forKey: envSelectionDefaultsKey)
+        UserDefaults.standard.set(destination.rawValue, forKey: destinationDefaultsKey)
     }
 
     private var header: some View {
@@ -171,19 +188,18 @@ struct ProjectDetailView: View {
                 }
             }
             if project.resolvedEnvironments.count > 1 {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Environment").font(.caption).foregroundStyle(.secondary)
-                    Picker("Environment", selection: $selection) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Environments").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
                         ForEach(project.resolvedEnvironments) { env in
-                            Text(env.name).tag(Optional(EnvironmentSelection.single(env)))
+                            environmentChip(env)
                         }
-                        Text("All").tag(Optional(EnvironmentSelection.all))
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 400, alignment: .leading)
-                    if isAllSelected {
-                        Text("Publishes sequentially: \(targetEnvironments.map(\.name).joined(separator: " → ")). Stops if any environment fails.")
+                    if targetEnvironments.isEmpty {
+                        Text("En az bir ortam seçin.")
+                            .font(.caption2).foregroundStyle(.orange)
+                    } else if isMultiTarget {
+                        Text("Sıralı yayınlanır: \(targetEnvironments.map(\.name).joined(separator: " → ")). Bir ortam başarısız olursa durur.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -208,17 +224,51 @@ struct ProjectDetailView: View {
                 Button {
                     startPipeline()
                 } label: {
-                    Label(isAllSelected ? "Upload all to \(destination.displayName)" : "Upload to \(destination.displayName)",
+                    Label(isMultiTarget
+                          ? "Upload \(targetEnvironments.count) environments to \(destination.displayName)"
+                          : "Upload to \(destination.displayName)",
                           systemImage: "icloud.and.arrow.up.fill")
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(credentials == nil || marketingVersion.isEmpty || buildNumber.isEmpty)
+                .disabled(credentials == nil || marketingVersion.isEmpty || buildNumber.isEmpty || targetEnvironments.isEmpty)
                 if credentials == nil {
                     Text("Configure API key first").font(.caption).foregroundStyle(.orange)
                 }
             }
+        }
+    }
+
+    /// A toggle chip for one environment in the multi-select picker.
+    @ViewBuilder
+    private func environmentChip(_ env: AppEnvironment) -> some View {
+        let isOn = selectedEnvNames.contains(env.name)
+        Button {
+            toggleEnv(env)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                Text(env.name)
+            }
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
+                in: Capsule()
+            )
+            .foregroundStyle(isOn ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        }
+        .buttonStyle(.plain)
+        .help(env.bundleIdentifier)
+    }
+
+    private func toggleEnv(_ env: AppEnvironment) {
+        if selectedEnvNames.contains(env.name) {
+            selectedEnvNames.remove(env.name)
+        } else {
+            selectedEnvNames.insert(env.name)
         }
     }
 
@@ -270,7 +320,7 @@ struct ProjectDetailView: View {
     private func fetchASCState(credentials: ASCCredentials) async -> ASCState {
         let api = ASCAPIClient(credentials: credentials)
         var state = ASCState()
-        if isAllSelected {
+        if isMultiTarget {
             // Sweep every target app so the suggested build number clears all of
             // them; show the last (Prod) env's TestFlight build for context.
             for env in targetEnvironments {
@@ -293,9 +343,9 @@ struct ProjectDetailView: View {
             marketingVersion = local?.marketingVersion ?? latestTF?.version ?? "1.0.0"
         }
         if buildNumber.isEmpty {
-            // In "All" mode the next build must be higher than every target app's
-            // latest, otherwise a mid-batch env hits a duplicate-build rejection.
-            let ascBuilds = isAllSelected
+            // With multiple targets the next build must be higher than every target
+            // app's latest, otherwise a mid-sweep env hits a duplicate-build rejection.
+            let ascBuilds = isMultiTarget
                 ? Array(allEnvLatestBuilds.values)
                 : [Int(latestTF?.preReleaseVersion ?? "") ?? 0]
             let candidates = ascBuilds + [Int(local?.buildNumber ?? "0") ?? 0]
@@ -320,6 +370,12 @@ struct ProjectDetailView: View {
                 // Abort the sweep on the first failure — never push a later
                 // environment (e.g. Prod) once an earlier one has broken.
                 if state.hasFailure { break }
+                // Upload succeeded: watch ASC processing (and the App Store attach)
+                // in the background so the next environment starts immediately
+                // instead of waiting on this one's processing. The watch is
+                // cancelled when the pipeline screen closes.
+                let watcher = orchestrator
+                batch.trackProcessingWatch(Task { @MainActor in await watcher.runProcessingWatch() })
             }
             batch.isFinished = true
         }

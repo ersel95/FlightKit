@@ -58,12 +58,12 @@ final class PublishOrchestrator {
             try await execute(.archive, body: { try await self.archive() })
             try await execute(.exportIPA, body: { try await self.exportIPA() })
             try await execute(.upload, body: { try await self.upload() })
-            try await execute(.waitProcessing, body: { try await self.waitForProcessing() })
-            if state.destination == .appStore {
-                try await execute(.attachVersion, body: { try await self.attachToAppStoreVersion() })
-            }
             state.isFinished = true
-            state.appendLog("🎉 Pipeline completed successfully", kind: .info)
+            // Processing (and the App Store version attach) is intentionally NOT a
+            // blocking step — it runs afterwards via `runProcessingWatch()`, started
+            // by the batch runner, so an "All" sweep moves to the next environment
+            // immediately instead of waiting up to 30 min per env.
+            state.appendLog("✓ Upload tamamlandı — App Store Connect işlemesi arka planda izlenecek", kind: .info)
         } catch {
             state.appendLog("✗ Pipeline failed: \(error.localizedDescription)", kind: .error)
             state.isFinished = true
@@ -240,38 +240,67 @@ final class PublishOrchestrator {
         state.uploadedAt = Date()
     }
 
-    private func waitForProcessing() async throws {
-        let api = ASCAPIClient(credentials: credentials)
-        guard let app = try await api.findApp(bundleId: project.bundleIdentifier) else {
-            throw PublishError.ascAPIError(status: 404, body: "App with bundle id \(project.bundleIdentifier) not found")
-        }
-        let deadline = Date().addingTimeInterval(60 * 30) // 30 min
-        // Only accept builds uploaded at/after our upload (minus skew tolerance) —
-        // guards against locking onto a stale earlier build, especially when we
-        // fall back to "latest" because the store renumbered ours.
-        let cutoff = (state.uploadedAt ?? Date()).addingTimeInterval(-300)
-        var pollCount = 0
-        while Date() < deadline {
-            pollCount += 1
-            if let build = try await resolveOurBuild(api: api, appId: app.id, cutoff: cutoff) {
-                state.appendLog("Build \(build.preReleaseVersion) (\(build.version)) — state: \(build.processingState.rawValue) [poll #\(pollCount)]", kind: .info)
-                state.uploadedBuildId = build.id
-                state.publishedMarketingVersion = build.preReleaseVersion
-                state.publishedBuildNumber = build.version
-                state.processingStateText = build.processingState.rawValue
-                if build.version != state.targetBuildNumber {
-                    state.appendLog("⚠︎ App Store Connect build numarasını \(state.targetBuildNumber) → \(build.version) olarak değiştirdi", kind: .fix)
-                }
-                if build.processingState.isTerminal {
-                    if build.processingState == .valid { return }
-                    throw PublishError.ascAPIError(status: 0, body: "Build processing ended with state \(build.processingState.rawValue)")
-                }
-            } else {
-                state.appendLog("Build not visible yet on ASC [poll #\(pollCount)]", kind: .info)
+    /// Non-blocking, post-upload watch: polls App Store Connect until the build
+    /// finishes processing, then — for App Store — attaches it to a version. Runs
+    /// independently per environment and is cancellable (the pipeline screen owns
+    /// its lifetime), so it never blocks an "All" sweep and never throws into the
+    /// pipeline; outcomes are recorded on `state.processingPhase`.
+    func runProcessingWatch() async {
+        state.processingPhase = .waiting
+        do {
+            let api = ASCAPIClient(credentials: credentials)
+            guard let app = try await api.findApp(bundleId: project.bundleIdentifier) else {
+                throw PublishError.ascAPIError(status: 404, body: "App with bundle id \(project.bundleIdentifier) not found")
             }
-            try await Task.sleep(nanoseconds: 30 * NSEC_PER_SEC)
+            let deadline = Date().addingTimeInterval(60 * 30) // 30 min
+            // Only accept builds uploaded at/after our upload (minus skew tolerance) —
+            // guards against locking onto a stale earlier build, especially when we
+            // fall back to "latest" because the store renumbered ours.
+            let cutoff = (state.uploadedAt ?? Date()).addingTimeInterval(-300)
+            var pollCount = 0
+            while Date() < deadline {
+                if Task.isCancelled {
+                    state.processingPhase = .stopped
+                    state.appendLog("⏸ İşleme izleme durduruldu (ekran kapatıldı)", kind: .info)
+                    return
+                }
+                pollCount += 1
+                if let build = try await resolveOurBuild(api: api, appId: app.id, cutoff: cutoff) {
+                    state.appendLog("Build \(build.preReleaseVersion) (\(build.version)) — state: \(build.processingState.rawValue) [poll #\(pollCount)]", kind: .info)
+                    state.uploadedBuildId = build.id
+                    state.publishedMarketingVersion = build.preReleaseVersion
+                    state.publishedBuildNumber = build.version
+                    state.processingStateText = build.processingState.rawValue
+                    if build.version != state.targetBuildNumber {
+                        state.appendLog("⚠︎ App Store Connect build numarasını \(state.targetBuildNumber) → \(build.version) olarak değiştirdi", kind: .fix)
+                    }
+                    if build.processingState.isTerminal {
+                        if build.processingState == .valid {
+                            state.processingPhase = .valid
+                            state.appendLog("✓ İşleme tamamlandı (VALID)", kind: .info)
+                            if state.destination == .appStore {
+                                try await attachProcessedBuild(api: api, appId: app.id)
+                            }
+                        } else {
+                            state.processingPhase = .failed(reason: "İşleme \(build.processingState.rawValue) ile sonuçlandı")
+                            state.appendLog("✗ İşleme \(build.processingState.rawValue) ile sonuçlandı", kind: .error)
+                        }
+                        return
+                    }
+                } else {
+                    state.appendLog("Build ASC'de henüz görünmüyor [poll #\(pollCount)]", kind: .info)
+                }
+                try await Task.sleep(nanoseconds: 30 * NSEC_PER_SEC)
+            }
+            state.processingPhase = .failed(reason: "Build 30 dk içinde işlenmedi")
+            state.appendLog("✗ İşleme 30 dk içinde tamamlanmadı", kind: .error)
+        } catch is CancellationError {
+            state.processingPhase = .stopped
+            state.appendLog("⏸ İşleme izleme durduruldu (ekran kapatıldı)", kind: .info)
+        } catch {
+            state.processingPhase = .failed(reason: error.localizedDescription)
+            state.appendLog("✗ İşleme izleme hatası: \(error.localizedDescription)", kind: .error)
         }
-        throw PublishError.timeout(stage: "waitProcessing")
     }
 
     /// Resolves the build we just uploaded. Prefers an exact build-number match;
@@ -290,28 +319,27 @@ final class PublishOrchestrator {
         return nil
     }
 
-    /// App Store destination only: attach the processed build to an editable App
-    /// Store version (created if missing). Does NOT submit for review.
-    private func attachToAppStoreVersion() async throws {
+    /// App Store destination only: attach the just-processed build to an editable
+    /// App Store version (created if missing). Does NOT submit for review. Called
+    /// from `runProcessingWatch` once the build is VALID, reusing its API client.
+    private func attachProcessedBuild(api: ASCAPIClient, appId: String) async throws {
         guard let buildId = state.uploadedBuildId else {
             throw PublishError.ascAPIError(status: 0, body: "No processed build id to attach")
         }
+        state.processingPhase = .attaching
         let versionString = state.publishedMarketingVersion ?? state.targetVersion
-        let api = ASCAPIClient(credentials: credentials)
-        guard let app = try await api.findApp(bundleId: project.bundleIdentifier) else {
-            throw PublishError.ascAPIError(status: 404, body: "App with bundle id \(project.bundleIdentifier) not found")
-        }
 
         let version: ASCAppStoreVersion
-        if let existing = try await api.appStoreVersion(appId: app.id, versionString: versionString) {
+        if let existing = try await api.appStoreVersion(appId: appId, versionString: versionString) {
             version = existing
-            state.appendLog("Using existing App Store version \(existing.versionString) [\(existing.appStoreState)]", kind: .info)
+            state.appendLog("Mevcut App Store sürümü kullanılıyor \(existing.versionString) [\(existing.appStoreState)]", kind: .info)
         } else {
-            version = try await api.createAppStoreVersion(appId: app.id, versionString: versionString)
-            state.appendLog("Created App Store version \(version.versionString)", kind: .info)
+            version = try await api.createAppStoreVersion(appId: appId, versionString: versionString)
+            state.appendLog("App Store sürümü oluşturuldu \(version.versionString)", kind: .info)
         }
 
         try await api.attachBuild(versionId: version.id, buildId: buildId)
-        state.appendLog("Attached build to App Store version \(version.versionString) — not submitted for review", kind: .info)
+        state.appendLog("Build, App Store sürümüne bağlandı \(version.versionString) — incelemeye gönderilmedi", kind: .info)
+        state.processingPhase = .attached(version: version.versionString)
     }
 }

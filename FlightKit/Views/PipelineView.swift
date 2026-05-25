@@ -51,6 +51,11 @@ struct PipelineView: View {
         .onChange(of: batch.isFinished) { _, finished in
             if finished { showReport = true }
         }
+        .onDisappear {
+            // The processing watch only runs "while the screen stays open" — stop
+            // polling once the pipeline window is dismissed.
+            batch.cancelProcessingWatches()
+        }
         .sheet(isPresented: $showReport) {
             PipelineReportView(batch: batch) { showReport = false }
                 .frame(minWidth: 560, minHeight: 420)
@@ -125,6 +130,10 @@ struct PipelineView: View {
                     Label(ipa.lastPathComponent, systemImage: "shippingbox.fill")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
+                }
+                if state.isFinished || state.processingPhase != .idle {
+                    Divider().padding(.vertical, 6)
+                    ProcessingStatusRow(state: state)
                 }
             }
             .padding(14)
@@ -332,6 +341,77 @@ private struct StepRow: View {
     }
 }
 
+/// Live, non-blocking status of the post-upload App Store Connect processing
+/// (and, for App Store, the automatic version attach). Mirrors `ProcessingPhase`.
+@MainActor
+private struct ProcessingStatusRow: View {
+    let state: PipelineState
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            indicator
+            VStack(alignment: .leading, spacing: 2) {
+                Text("App Store Connect işlemesi").font(.body.weight(.medium))
+                Text(ProcessingPresentation.detail(for: state))
+                    .font(.caption2)
+                    .foregroundStyle(ProcessingPresentation.isError(state.processingPhase) ? .red : .secondary)
+                    .lineLimit(3)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        switch state.processingPhase {
+        case .idle:
+            Image(systemName: "clock").foregroundStyle(.tertiary).frame(width: 18, height: 18)
+        case .waiting, .attaching:
+            ProgressView().controlSize(.small).frame(width: 18, height: 18)
+        case .valid, .attached:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 18, height: 18)
+        case .failed:
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red).frame(width: 18, height: 18)
+        case .stopped:
+            Image(systemName: "pause.circle.fill").foregroundStyle(.orange).frame(width: 18, height: 18)
+        }
+    }
+}
+
+/// Shared human-readable text for a `PipelineState`'s processing phase, used by
+/// both the live pipeline view and the post-run report.
+@MainActor
+enum ProcessingPresentation {
+    static func isError(_ phase: ProcessingPhase) -> Bool {
+        if case .failed = phase { return true }
+        return false
+    }
+
+    static func detail(for state: PipelineState) -> String {
+        switch state.processingPhase {
+        case .idle:
+            return "Upload sonrası başlayacak"
+        case .waiting:
+            let raw = state.processingStateText.map { " (\($0))" } ?? ""
+            return "İşleniyor…\(raw)"
+        case .valid:
+            return state.destination == .appStore
+                ? "İşleme tamamlandı — sürüme bağlanıyor"
+                : "İşleme tamamlandı — TestFlight'ta hazır"
+        case .attaching:
+            return "App Store sürümüne bağlanıyor…"
+        case .attached(let version):
+            return "Sürüm \(version)'e bağlandı — incelemeye gönderilmedi"
+        case .failed(let reason):
+            return reason
+        case .stopped:
+            return "İzleme durduruldu — ekranı açık tutarak devam ettirin"
+        }
+    }
+}
+
 // MARK: - Report
 
 /// Post-run summary: per environment, what we submitted vs what App Store Connect
@@ -418,8 +498,15 @@ struct PipelineReportView: View {
             }
         }
 
-        if let processing = state.processingStateText {
-            LabeledContent("İşlem durumu", value: processing.capitalized)
+        LabeledContent("İşleme durumu") {
+            HStack(spacing: 6) {
+                if !state.processingPhase.isTerminal && state.processingPhase != .idle {
+                    ProgressView().controlSize(.small)
+                }
+                Text(ProcessingPresentation.detail(for: state))
+                    .foregroundStyle(ProcessingPresentation.isError(state.processingPhase) ? .red : .secondary)
+                    .multilineTextAlignment(.trailing)
+            }
         }
 
         if let failure = failure(for: state) {

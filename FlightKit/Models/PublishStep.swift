@@ -21,15 +21,16 @@ enum PublishStep: String, CaseIterable, Identifiable, Hashable {
 
     var displayName: String { rawValue }
 
-    /// The ordered steps for a given destination. `attachVersion` only runs for
-    /// App Store (TestFlight needs nothing past processing).
+    /// The ordered *blocking* steps for a given destination. The pipeline ends at
+    /// `upload`; what comes after — ASC processing and (App Store only) the version
+    /// attach — runs as a non-blocking background watch so environments in an "All"
+    /// sweep never wait on each other's processing. `waitProcessing`/`attachVersion`
+    /// therefore no longer appear as pipeline steps (see `ProcessingPhase`).
     static func steps(for destination: DistributionTarget) -> [PublishStep] {
-        var steps: [PublishStep] = [
+        [
             .validate, .writeXcconfig, .generateExportOptions,
-            .archive, .exportIPA, .upload, .waitProcessing,
+            .archive, .exportIPA, .upload,
         ]
-        if destination == .appStore { steps.append(.attachVersion) }
-        return steps
     }
 
     var systemImage: String {
