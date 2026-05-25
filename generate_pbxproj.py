@@ -12,6 +12,12 @@ APP_FILE = "FlightKitApp.swift"   # @main entry source
 BUNDLE_ID = "com.flightkit.app"
 TEAM_ID = ""  # users will sign locally
 
+# Sparkle (auto-update) is the project's one external dependency, pulled via SPM.
+# Its framework is embedded + signed by the release pipeline (see release-dmg.sh).
+SPARKLE_REPO = "https://github.com/sparkle-project/Sparkle"
+SPARKLE_MIN_VERSION = "2.9.0"
+INFO_PLIST = "Info.plist"  # custom keys (Sparkle SUFeedURL/SUPublicEDKey) live here
+
 SOURCES = [
     (APP_FILE, ""),
     ("Models/AppProject.swift", "Models"),
@@ -40,6 +46,7 @@ SOURCES = [
     ("Views/ProjectDetailView.swift", "Views"),
     ("Views/CredentialsEditor.swift", "Views"),
     ("Views/PipelineView.swift", "Views"),
+    ("Views/UpdaterView.swift", "Views"),
 ]
 RESOURCES = [
     ("Resources/Assets.xcassets", "Resources", "folder.assetcatalog"),
@@ -76,6 +83,12 @@ def main():
 
     product_ref = uid("F5", 1)
     entitlements_ref = uid("F5", 2)
+    info_plist_ref = uid("F5", 3)
+
+    # Sparkle SPM dependency objects.
+    sparkle_pkg_ref = uid("F6", 1)   # XCRemoteSwiftPackageReference
+    sparkle_prod_dep = uid("F6", 2)  # XCSwiftPackageProductDependency
+    sparkle_build_file = uid("F6", 3)  # PBXBuildFile (Sparkle in Frameworks)
 
     # File refs and build files
     file_refs = {}      # path -> uid
@@ -112,6 +125,7 @@ def main():
     for path, _, _ in RESOURCES:
         name = Path(path).name
         out.append(f"\t\t{build_files[path]} /* {name} in Resources */ = {{isa = PBXBuildFile; fileRef = {file_refs[path]} /* {name} */; }};")
+    out.append(f"\t\t{sparkle_build_file} /* Sparkle in Frameworks */ = {{isa = PBXBuildFile; productRef = {sparkle_prod_dep} /* Sparkle */; }};")
     out.append("/* End PBXBuildFile section */")
 
     # PBXFileReference
@@ -119,6 +133,7 @@ def main():
     out.append("/* Begin PBXFileReference section */")
     out.append(f'\t\t{product_ref} /* {DISPLAY_NAME}.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "{DISPLAY_NAME}.app"; sourceTree = BUILT_PRODUCTS_DIR; }};')
     out.append(f'\t\t{entitlements_ref} /* {ENTITLEMENTS} */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = {ENTITLEMENTS}; sourceTree = "<group>"; }};')
+    out.append(f'\t\t{info_plist_ref} /* {INFO_PLIST} */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = {INFO_PLIST}; sourceTree = "<group>"; }};')
     for path, _ in SOURCES:
         name = Path(path).name
         out.append(f'\t\t{file_refs[path]} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {name}; sourceTree = "<group>"; }};')
@@ -134,6 +149,7 @@ def main():
     out.append("\t\t\tisa = PBXFrameworksBuildPhase;")
     out.append("\t\t\tbuildActionMask = 2147483647;")
     out.append("\t\t\tfiles = (")
+    out.append(f"\t\t\t\t{sparkle_build_file} /* Sparkle in Frameworks */,")
     out.append("\t\t\t);")
     out.append("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
     out.append("\t\t};")
@@ -173,6 +189,7 @@ def main():
     out.append(f"\t\t\t\t{views_group} /* Views */,")
     out.append(f"\t\t\t\t{resources_group} /* Resources */,")
     out.append(f"\t\t\t\t{entitlements_ref} /* {ENTITLEMENTS} */,")
+    out.append(f"\t\t\t\t{info_plist_ref} /* {INFO_PLIST} */,")
     out.append("\t\t\t);")
     out.append(f"\t\t\tpath = {APP_NAME};")
     out.append("\t\t\tsourceTree = \"<group>\";")
@@ -220,6 +237,9 @@ def main():
     out.append("\t\t\tdependencies = (")
     out.append("\t\t\t);")
     out.append(f"\t\t\tname = {APP_NAME};")
+    out.append("\t\t\tpackageProductDependencies = (")
+    out.append(f"\t\t\t\t{sparkle_prod_dep} /* Sparkle */,")
+    out.append("\t\t\t);")
     out.append(f"\t\t\tproductName = {APP_NAME};")
     out.append(f"\t\t\tproductReference = {product_ref} /* {DISPLAY_NAME}.app */;")
     out.append("\t\t\tproductType = \"com.apple.product-type.application\";")
@@ -250,6 +270,9 @@ def main():
     out.append("\t\t\t\tBase,")
     out.append("\t\t\t);")
     out.append(f"\t\t\tmainGroup = {main_group};")
+    out.append("\t\t\tpackageReferences = (")
+    out.append(f"\t\t\t\t{sparkle_pkg_ref} /* XCRemoteSwiftPackageReference \"Sparkle\" */,")
+    out.append("\t\t\t);")
     out.append(f"\t\t\tproductRefGroup = {products_group} /* Products */;")
     out.append("\t\t\tprojectDirPath = \"\";")
     out.append("\t\t\tprojectRoot = \"\";")
@@ -357,6 +380,12 @@ def main():
         "ENABLE_HARDENED_RUNTIME = YES;",
         "ENABLE_PREVIEWS = YES;",
         "GENERATE_INFOPLIST_FILE = YES;",
+        # Custom Info.plist holds the Sparkle keys; GENERATE_INFOPLIST_FILE still
+        # merges the synthesized + INFOPLIST_KEY_* values on top of it.
+        f"INFOPLIST_FILE = {APP_NAME}/{INFO_PLIST};",
+        # Required so the loader finds the embedded Sparkle.framework at runtime.
+        # Xcode's app template sets this implicitly; our generated project must too.
+        "LD_RUNPATH_SEARCH_PATHS = \"$(inherited) @executable_path/../Frameworks\";",
         f"INFOPLIST_KEY_CFBundleDisplayName = \"{DISPLAY_NAME}\";",
         f"INFOPLIST_KEY_CFBundleName = \"{DISPLAY_NAME}\";",
         "INFOPLIST_KEY_LSApplicationCategoryType = \"public.app-category.developer-tools\";",
@@ -401,6 +430,29 @@ def main():
     out.append("\t\t\tdefaultConfigurationName = Release;")
     out.append("\t\t};")
     out.append("/* End XCConfigurationList section */")
+
+    # XCRemoteSwiftPackageReference (Sparkle)
+    out.append("")
+    out.append("/* Begin XCRemoteSwiftPackageReference section */")
+    out.append(f'\t\t{sparkle_pkg_ref} /* XCRemoteSwiftPackageReference "Sparkle" */ = {{')
+    out.append("\t\t\tisa = XCRemoteSwiftPackageReference;")
+    out.append(f'\t\t\trepositoryURL = "{SPARKLE_REPO}";')
+    out.append("\t\t\trequirement = {")
+    out.append("\t\t\t\tkind = upToNextMajorVersion;")
+    out.append(f"\t\t\t\tminimumVersion = {SPARKLE_MIN_VERSION};")
+    out.append("\t\t\t};")
+    out.append("\t\t};")
+    out.append("/* End XCRemoteSwiftPackageReference section */")
+
+    # XCSwiftPackageProductDependency (Sparkle)
+    out.append("")
+    out.append("/* Begin XCSwiftPackageProductDependency section */")
+    out.append(f"\t\t{sparkle_prod_dep} /* Sparkle */ = {{")
+    out.append("\t\t\tisa = XCSwiftPackageProductDependency;")
+    out.append(f'\t\t\tpackage = {sparkle_pkg_ref} /* XCRemoteSwiftPackageReference "Sparkle" */;')
+    out.append("\t\t\tproductName = Sparkle;")
+    out.append("\t\t};")
+    out.append("/* End XCSwiftPackageProductDependency section */")
 
     out.append("\t};")
     out.append(f"\trootObject = {proj_uid} /* Project object */;")

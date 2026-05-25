@@ -11,6 +11,9 @@ import SwiftUI
 @MainActor
 struct FlightKitApp: App {
     @State private var store = ProjectStore()
+    /// Sparkle auto-updater — checks the GitHub appcast on launch and offers any
+    /// newer notarized build (notify + confirm, never silent). See `UpdaterView`.
+    @StateObject private var updater = UpdaterController()
 
     var body: some Scene {
         WindowGroup("FlightKit") {
@@ -19,5 +22,10 @@ struct FlightKitApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.titleBar)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(updater: updater.controller.updater)
+            }
+        }
     }
 }

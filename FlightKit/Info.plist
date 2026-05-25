@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle auto-update. The remaining Info.plist keys (CFBundle*, etc.) are
+	     synthesized by GENERATE_INFOPLIST_FILE and merged on top of this file. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/ersel95/FlightKit/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>9JkXM0K2YchWHd50/0Ul5t3hvTefTBVmjslCkdglv1k=</string>
+	<!-- Check on launch + on a schedule, but never install without asking
+	     (notify + confirm). -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>

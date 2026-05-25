@@ -56,19 +56,45 @@ jobs:
           DMG="dist/FlightKit-${{ steps.ver.outputs.version }}.dmg"
           echo "sha256=$(shasum -a 256 "$DMG" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Update Homebrew cask
+      - name: Sign DMG for Sparkle (EdDSA)
+        id: sparkle
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          DMG="dist/FlightKit-$VERSION.dmg"
+          curl -fsSL -o sparkle.tar.xz \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz
+          mkdir -p sparkle-tools && tar -xf sparkle.tar.xz -C sparkle-tools
+          # Outputs: sparkle:edSignature="..." length="..."
+          OUT="$(sparkle-tools/bin/sign_update "$DMG" -s "$SPARKLE_ED_PRIVATE_KEY")"
+          SIG="$(printf '%s' "$OUT" | sed -E 's/.*edSignature="([^"]+)".*/\1/')"
+          LEN="$(printf '%s' "$OUT" | sed -E 's/.*length="([^"]+)".*/\1/')"
+          {
+            echo "signature=$SIG"
+            echo "length=$LEN"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew cask + Sparkle appcast
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           SHA="${{ steps.sum.outputs.sha256 }}"
-          # Update the cask on main (the build ran from a detached tag checkout).
+          SIG="${{ steps.sparkle.outputs.signature }}"
+          LEN="${{ steps.sparkle.outputs.length }}"
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION/FlightKit-$VERSION.dmg"
+          # Commit the cask bump and the appcast item together on main (the build
+          # ran from a detached tag checkout). appcast.xml is what the app polls.
           git fetch origin main
           git checkout main
           sed -i '' -E "s/version \".*\"/version \"$VERSION\"/" Casks/flightkit.rb
           sed -i '' -E "s/sha256 \".*\"/sha256 \"$SHA\"/" Casks/flightkit.rb
+          python3 scripts/update_appcast.py \
+            --version "$VERSION" --url "$DMG_URL" --length "$LEN" --signature "$SIG" \
+            --notes-url "https://github.com/${{ github.repository }}/releases/tag/v$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/flightkit.rb
-          git commit -m "chore: cask -> $VERSION" && git push origin main || echo "no cask change"
+          git add Casks/flightkit.rb appcast.xml
+          git commit -m "chore: release $VERSION (cask + appcast)" && git push origin main || echo "no change"
 
       - name: Create release
         uses: softprops/action-gh-release@v2

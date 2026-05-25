@@ -12,7 +12,9 @@
 2. The Xcode project is **generated**, not committed. After adding/removing a
    Swift file, update `SOURCES` in `generate_pbxproj.py` and re-run it. The
    `.xcodeproj` is git-ignored.
-3. Keep it dependency-free (no SPM/CocoaPods) and macOS 14+.
+3. macOS 14+. **Sparkle** (auto-update) is the **only** allowed dependency, pulled
+   via SPM and wired into the generated project by `generate_pbxproj.py`. Do not add
+   other SPM/CocoaPods dependencies without a comparably strong reason.
 4. **Must compile clean under Swift 6 language mode.** The CI toolchain is stricter
    than a local Xcode may be — verify locally before pushing a release tag:
    `xcodebuild -project FlightKit.xcodeproj -scheme FlightKit -configuration Release -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=6 build`
@@ -86,6 +88,15 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   independent processing watch.
 - **Report**: `PipelineReportView` shows submitted vs ASC-recorded version,
   flagging a store renumber.
+- **Auto-update (Sparkle)**: `UpdaterController` owns `SPUStandardUpdaterController`
+  (`UpdaterView.swift`); a "Güncellemeleri Denetle…" menu item sits under the app
+  menu. `Info.plist` carries `SUFeedURL` (the appcast on raw `main`), `SUPublicEDKey`,
+  `SUEnableAutomaticChecks=YES`, `SUAutomaticallyUpdate=NO` → checks on launch +
+  daily, **notifies and asks** before installing (never silent). The feed
+  `appcast.xml` lives at the repo root; CI signs each DMG with EdDSA (`sign_update`)
+  and `scripts/update_appcast.py` inserts the new `<item>`. The app's bundle version
+  is stamped from the git tag at release time (`build-app.sh <cfg> <version>`), so
+  Sparkle can compare it against the feed.
 
 ## Gotchas
 
@@ -103,6 +114,14 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` as command-line overrides anyway.
 - The log view is an `NSTextView` (`SelectableLogView`) for full selection and
   performant streaming; tail-follow uses `didLiveScroll` (user scroll only).
+- **Sparkle signing**: the release build is unsigned (`CODE_SIGNING_ALLOWED=NO`), so
+  `release-dmg.sh` must sign every nested Sparkle component (XPCServices, `Autoupdate`,
+  `Updater.app`, then the framework) with hardened runtime + timestamp **before** the
+  outer app — signing the app seals its contents. Use `--preserve-metadata=entitlements`
+  on the XPC services. Don't reach for `--deep`.
+- **Sparkle bootstrap**: a build without Sparkle can't auto-update — users on such a
+  build must update once manually to a Sparkle-enabled release; auto-update works from
+  there. The `appcast.xml` URL 404s until the first Sparkle release populates it.
 - `ProjectStore.init` is a normal (`@MainActor`) init; do **not** make it
   `nonisolated` — a nonisolated init can't assign the `@MainActor` `projects`.
   `FlightKitApp` being `@MainActor` is what lets `@State = ProjectStore()` build.
@@ -116,11 +135,14 @@ git tag v1.0.0 && git push origin v1.0.0                    # CI: sign+notarize+
 ```
 
 Release builds are **Developer ID signed + notarized + stapled** (app and DMG).
-CI (`release.yml`) needs these repo **secrets** (already configured):
+CI (`release.yml`) needs these repo **secrets**:
 `DEVELOPER_ID_CERT_P12_BASE64`, `DEVELOPER_ID_CERT_PASSWORD`, `SIGNING_IDENTITY`,
-`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64`. The notarization ASC key must
+`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64`, and **`SPARKLE_ED_PRIVATE_KEY`**
+(the 44-char base64 EdDSA private key — `generate_keys --account flightkit -x -`;
+the public half is `SUPublicEDKey` in `Info.plist`). The notarization ASC key must
 belong to the **same team** as the signing cert. `scripts/release-dmg.sh` runs the
-sign → notarytool → staple → DMG flow and is invoked by the workflow.
+build → **sign Sparkle.framework inside-out** → sign app → notarytool → staple → DMG
+flow; the workflow then EdDSA-signs the DMG and updates `appcast.xml` on `main`.
 
 Distribution: GitHub Releases (`FlightKit-<v>.dmg`) and `brew install --cask flightkit`
 (tap `ersel95/flightkit`). v1.0.0 shipped & verified notarized (2026-05-22).

@@ -23,12 +23,33 @@ APP="$DIST/FlightKit.app"
 DMG="$DIST/FlightKit-$VERSION.dmg"
 STAGE="$(mktemp -d)/FlightKit"
 
-# 1. Build (unsigned), then re-sign with Developer ID + hardened runtime + timestamp.
-scripts/build-app.sh Release
+# 1. Build (unsigned, version-stamped). Stamping the tag version in lets Sparkle
+#    compare the running app against the appcast.
+scripts/build-app.sh Release "$VERSION"
+
+# 2. Sign the embedded Sparkle.framework inside-out BEFORE the outer app — signing
+#    the app seals its contents, so every nested executable must already be signed.
+#    The build is unsigned (CODE_SIGNING_ALLOWED=NO), so we sign all of Sparkle's
+#    helpers ourselves with Developer ID + hardened runtime + timestamp.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE" ]]; then
+  SPV="$SPARKLE/Versions/B"
+  # XPC services ship with their own entitlements (Downloader is sandboxed) — keep them.
+  for xpc in "$SPV/XPCServices/Installer.xpc" "$SPV/XPCServices/Downloader.xpc"; do
+    [[ -e "$xpc" ]] && codesign --force --options runtime --timestamp \
+      --preserve-metadata=entitlements,requirements,flags \
+      --sign "$SIGNING_IDENTITY" "$xpc"
+  done
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$SPV/Autoupdate"
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$SPV/Updater.app"
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$SPARKLE"
+fi
+
+# 3. Sign the outer app last (seals the now-signed framework).
 codesign --force --options runtime --timestamp \
   --entitlements FlightKit/FlightKit.entitlements \
   --sign "$SIGNING_IDENTITY" "$APP"
-codesign --verify --strict --verbose=2 "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
 
 # 2. Notarize the app and staple the ticket (so it launches offline too).
 ditto -c -k --keepParent "$APP" "$DIST/FlightKit.zip"
