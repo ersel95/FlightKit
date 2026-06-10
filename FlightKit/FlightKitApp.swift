@@ -27,5 +27,9 @@ struct FlightKitApp: App {
                 CheckForUpdatesView(updater: updater.controller.updater)
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }

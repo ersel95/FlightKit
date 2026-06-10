@@ -29,6 +29,7 @@ SOURCES = [
     ("Models/PipelineState.swift", "Models"),
     ("Models/PublishError.swift", "Models"),
     ("Models/HealRule.swift", "Models"),
+    ("Models/AppSettings.swift", "Models"),
     ("Services/KeychainStore.swift", "Services"),
     ("Services/JWTGenerator.swift", "Services"),
     ("Services/ASCAPIClient.swift", "Services"),
@@ -47,6 +48,7 @@ SOURCES = [
     ("Views/CredentialsEditor.swift", "Views"),
     ("Views/PipelineView.swift", "Views"),
     ("Views/UpdaterView.swift", "Views"),
+    ("Views/SettingsView.swift", "Views"),
 ]
 RESOURCES = [
     ("Resources/Assets.xcassets", "Resources", "folder.assetcatalog"),
