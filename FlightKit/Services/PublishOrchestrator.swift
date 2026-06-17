@@ -158,7 +158,7 @@ final class PublishOrchestrator {
     }
 
     private func archive() async throws {
-        try? FileManager.default.createDirectory(at: sharedSPMCacheDir, withIntermediateDirectories: true)
+        try linkSharedSPMCacheIntoDerivedData()
         let logState = state
         let result = try await XcodebuildRunner.run(
             args: project.xcodebuildContainerArguments + [
@@ -166,7 +166,6 @@ final class PublishOrchestrator {
                 "-configuration", project.configuration,
                 "-destination", "generic/platform=iOS",
                 "-derivedDataPath", derivedDataDir.path,
-                "-clonedSourcePackagesDirPath", sharedSPMCacheDir.path,
                 "-archivePath", archiveURL.path,
                 "MARKETING_VERSION=\(state.targetVersion)",
                 "CURRENT_PROJECT_VERSION=\(state.targetBuildNumber)",
@@ -178,6 +177,27 @@ final class PublishOrchestrator {
         )
         guard result.exitCode == 0 else {
             throw PublishError.xcodebuildFailed(stage: "archive", exitCode: result.exitCode, log: result.combinedLog)
+        }
+    }
+
+    /// Symlinks the persistent shared SPM cache to where xcodebuild expects SPM
+    /// checkouts by default — `<derivedDataPath>/SourcePackages`. We deliberately
+    /// do NOT pass `-clonedSourcePackagesDirPath` for the archive: doing so moves
+    /// checkouts outside DerivedData, which breaks build-phase scripts that derive
+    /// their own path from `${BUILD_DIR%/Build/*}/SourcePackages/checkouts/...`
+    /// (e.g. Firebase Crashlytics' `run`, which then 404s and fails the archive
+    /// with PhaseScriptExecution exit 65). Symlinking keeps the cross-run cache
+    /// reuse while letting those scripts resolve their path under DerivedData.
+    private func linkSharedSPMCacheIntoDerivedData() throws {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: sharedSPMCacheDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: derivedDataDir, withIntermediateDirectories: true)
+        let link = derivedDataDir.appending(path: "SourcePackages")
+        // Recreate the link only if it isn't already pointing at the shared cache
+        // (DerivedData lives in /tmp and may be wiped between runs).
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != sharedSPMCacheDir.path {
+            try? fm.removeItem(at: link)
+            try fm.createSymbolicLink(at: link, withDestinationURL: sharedSPMCacheDir)
         }
     }
 
