@@ -14,6 +14,9 @@ final class PipelineState {
     let destination: DistributionTarget
     let targetVersion: String
     let targetBuildNumber: String
+    /// The TestFlight "What to Test" note to write to the build once it finishes
+    /// processing (in `runProcessingWatch`). `nil`/empty means no note is written.
+    let testNote: String?
     var stepStatuses: [PublishStep: PublishStepStatus]
     var currentStep: PublishStep?
     var logLines: [LogLine] = []
@@ -45,11 +48,12 @@ final class PipelineState {
     /// adds the attach step).
     var steps: [PublishStep] { PublishStep.steps(for: destination) }
 
-    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String) {
+    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String, testNote: String? = nil) {
         self.project = project
         self.destination = destination
         self.targetVersion = version
         self.targetBuildNumber = buildNumber
+        self.testNote = testNote
         var initial: [PublishStep: PublishStepStatus] = [:]
         for step in PublishStep.steps(for: destination) {
             initial[step] = .pending

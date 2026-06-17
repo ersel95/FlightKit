@@ -33,4 +33,23 @@ enum AppSettings {
     static var buildNumberShared: Bool {
         UserDefaults.standard.object(forKey: buildNumberSharedKey) as? Bool ?? true
     }
+
+    /// When `true`, a TestFlight "What to Test" note is asked for on every run
+    /// (the editable field is shown). When `false`, the field is hidden and no
+    /// note is written. The note itself is always optional — leaving it blank
+    /// simply skips the write.
+    static let testNoteManagedKey = "FlightKit.settings.testNoteManaged"
+
+    /// Only meaningful when `testNoteManaged` is `true`. When `true`, one note is
+    /// shared across every selected environment; when `false`, each environment
+    /// gets its own note field.
+    static let testNoteSharedKey = "FlightKit.settings.testNoteShared"
+
+    static var testNoteManaged: Bool {
+        UserDefaults.standard.object(forKey: testNoteManagedKey) as? Bool ?? true
+    }
+
+    static var testNoteShared: Bool {
+        UserDefaults.standard.object(forKey: testNoteSharedKey) as? Bool ?? true
+    }
 }

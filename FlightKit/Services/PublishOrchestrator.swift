@@ -278,6 +278,9 @@ final class PublishOrchestrator {
                         if build.processingState == .valid {
                             state.processingPhase = .valid
                             state.appendLog("✓ İşleme tamamlandı (VALID)", kind: .info)
+                            // Write the TestFlight "What to Test" note (best-effort,
+                            // never fails the watch) before any App Store attach.
+                            await writeTestNote(api: api)
                             if state.destination == .appStore {
                                 try await attachProcessedBuild(api: api, appId: app.id)
                             }
@@ -341,5 +344,30 @@ final class PublishOrchestrator {
         try await api.attachBuild(versionId: version.id, buildId: buildId)
         state.appendLog("Build, App Store sürümüne bağlandı \(version.versionString) — incelemeye gönderilmedi", kind: .info)
         state.processingPhase = .attached(version: version.versionString)
+    }
+
+    /// Writes the TestFlight "What to Test" note onto the processed build, into
+    /// every locale the build already exposes (or `en-US` if it has none yet).
+    /// Best-effort: an empty/absent note is a no-op, and any failure only logs —
+    /// it never flips `processingPhase` (a missing test note must not mark an
+    /// otherwise-successful build as failed). Called once the build is VALID.
+    private func writeTestNote(api: ASCAPIClient) async {
+        let note = state.testNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !note.isEmpty, let buildId = state.uploadedBuildId else { return }
+        do {
+            let localizations = try await api.betaBuildLocalizations(buildId: buildId)
+            if localizations.isEmpty {
+                try await api.createTestNote(buildId: buildId, locale: "en-US", whatsNew: note)
+                state.appendLog("✓ Test notu yazıldı (en-US)", kind: .info)
+            } else {
+                for localization in localizations {
+                    try await api.updateTestNote(localizationId: localization.id, whatsNew: note)
+                }
+                let locales = localizations.map(\.locale).filter { !$0.isEmpty }.joined(separator: ", ")
+                state.appendLog("✓ Test notu yazıldı (\(locales))", kind: .info)
+            }
+        } catch {
+            state.appendLog("⚠︎ Test notu yazılamadı: \(error.localizedDescription)", kind: .error)
+        }
     }
 }

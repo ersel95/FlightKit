@@ -26,12 +26,21 @@ struct ProjectDetailView: View {
     /// Per-environment build numbers (keyed by env name), used when the
     /// "her ortam için ayrı" setting is active.
     @State private var perEnvBuildNumbers: [String: String] = [:]
+    /// The shared TestFlight "What to Test" note, used when `testNoteShared` is on.
+    @State private var testNote: String = ""
+    /// Per-environment test notes (keyed by env name), used when the test note
+    /// "her ortam için ayrı" setting is active.
+    @State private var perEnvTestNotes: [String: String] = [:]
     @State private var showCredentialsSheet = false
 
     /// Whether the build number is asked for each run (vs. auto-sending `1`).
     @AppStorage(AppSettings.buildNumberManagedKey) private var buildNumberManaged = true
     /// Whether one build number is shared across environments (vs. one each).
     @AppStorage(AppSettings.buildNumberSharedKey) private var buildNumberShared = true
+    /// Whether a test note is asked for each run.
+    @AppStorage(AppSettings.testNoteManagedKey) private var testNoteManaged = true
+    /// Whether one test note is shared across environments (vs. one each).
+    @AppStorage(AppSettings.testNoteSharedKey) private var testNoteShared = true
     @State private var pipelineBatch: PipelineBatch?
     /// The environments the user has ticked, by name. Any subset is allowed
     /// (e.g. Test + Prod, or Test + UAT). Persisted per project across launches.
@@ -86,6 +95,8 @@ struct ProjectDetailView: View {
             marketingVersion = ""
             buildNumber = ""
             perEnvBuildNumbers = [:]
+            testNote = ""
+            perEnvTestNotes = [:]
             Task { await reload() }
         }
         .onChange(of: destination) {
@@ -231,6 +242,7 @@ struct ProjectDetailView: View {
                         .buttonStyle(.bordered)
                 }
             }
+            testNoteInputs
             HStack {
                 Button {
                     startPipeline()
@@ -330,6 +342,57 @@ struct ProjectDetailView: View {
         guard buildNumberManaged else { return AppSettings.unmanagedBuildNumber }
         if buildNumberShared { return buildNumber }
         return perEnvBuildNumbers[env.name] ?? AppSettings.unmanagedBuildNumber
+    }
+
+    // MARK: - Test note input (governed by Settings)
+
+    /// The TestFlight "What to Test" entry area. Hidden when management is off,
+    /// otherwise a single shared editor or one editor per environment. Always
+    /// optional — a blank note simply skips the write after the build processes.
+    @ViewBuilder
+    private var testNoteInputs: some View {
+        if testNoteManaged {
+            if testNoteShared {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Test notu (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                    testNoteEditor(text: $testNote)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(targetEnvironments) { env in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Test notu · \(env.name) (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                            testNoteEditor(text: perEnvNoteBinding(env))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func testNoteEditor(text: Binding<String>) -> some View {
+        TextEditor(text: text)
+            .font(.callout)
+            .frame(height: 72)
+            .padding(4)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+            .frame(maxWidth: 420, alignment: .leading)
+    }
+
+    private func perEnvNoteBinding(_ env: AppEnvironment) -> Binding<String> {
+        Binding(
+            get: { perEnvTestNotes[env.name] ?? "" },
+            set: { perEnvTestNotes[env.name] = $0 }
+        )
+    }
+
+    /// The test note that will be written for `env` once its build processes:
+    /// `nil` when management is off or the relevant field is blank.
+    private func effectiveTestNote(for env: AppEnvironment) -> String? {
+        guard testNoteManaged else { return nil }
+        let raw = testNoteShared ? testNote : (perEnvTestNotes[env.name] ?? "")
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Whether the version/build inputs are complete enough to start a run.
@@ -444,7 +507,7 @@ struct ProjectDetailView: View {
         let envs = targetEnvironments
         guard !envs.isEmpty else { return }
         let states = envs.map {
-            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0))
+            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0), testNote: effectiveTestNote(for: $0))
         }
         let batch = PipelineBatch(states: states)
         pipelineBatch = batch

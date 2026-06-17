@@ -190,6 +190,57 @@ actor ASCAPIClient {
         try ensureOK(response, data: data)
     }
 
+    // MARK: - TestFlight "What to Test" (betaBuildLocalizations)
+
+    /// The build's existing "What to Test" localizations, one per locale. App
+    /// Store Connect seeds these automatically for a build's locales; we write the
+    /// note into each (or create one for `en-US` if none exist yet).
+    func betaBuildLocalizations(buildId: String) async throws -> [(id: String, locale: String)] {
+        let url = URL(string: "https://api.appstoreconnect.apple.com/v1/builds/\(buildId)/betaBuildLocalizations")!
+        let (data, response) = try await get(url)
+        try ensureOK(response, data: data)
+
+        struct Envelope: Decodable {
+            struct Item: Decodable {
+                let id: String
+                let attributes: Attrs
+                struct Attrs: Decodable { let locale: String? }
+            }
+            let data: [Item]
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        return env.data.map { (id: $0.id, locale: $0.attributes.locale ?? "") }
+    }
+
+    /// Updates an existing localization's `whatsNew` (the TestFlight test note).
+    func updateTestNote(localizationId: String, whatsNew: String) async throws {
+        let url = URL(string: "https://api.appstoreconnect.apple.com/v1/betaBuildLocalizations/\(localizationId)")!
+        let body: [String: Any] = [
+            "data": [
+                "type": "betaBuildLocalizations",
+                "id": localizationId,
+                "attributes": ["whatsNew": whatsNew],
+            ],
+        ]
+        let (data, response) = try await send("PATCH", url: url, jsonBody: body)
+        try ensureOK(response, data: data)
+    }
+
+    /// Creates a new localization carrying the test note for `locale` (used when
+    /// the build has no betaBuildLocalizations yet).
+    func createTestNote(buildId: String, locale: String, whatsNew: String) async throws {
+        let url = URL(string: "https://api.appstoreconnect.apple.com/v1/betaBuildLocalizations")!
+        let body: [String: Any] = [
+            "data": [
+                "type": "betaBuildLocalizations",
+                "attributes": ["locale": locale, "whatsNew": whatsNew],
+                "relationships": ["build": ["data": ["type": "builds", "id": buildId]]],
+            ],
+        ]
+        let (data, response) = try await send("POST", url: url, jsonBody: body)
+        try ensureOK(response, data: data)
+    }
+
     private func decodeFirstVersion(from data: Data) -> ASCAppStoreVersion? {
         struct Envelope: Decodable {
             struct Item: Decodable {
