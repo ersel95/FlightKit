@@ -46,3 +46,13 @@ struct ASCApp: Hashable {
     let name: String
     let bundleId: String
 }
+
+/// A TestFlight beta group (internal or external) on an app record. The user
+/// picks a subset at launch; the processed build is assigned to them once it
+/// reaches VALID. External groups only distribute after the build clears beta
+/// review.
+struct ASCBetaGroup: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let isInternal: Bool
+}

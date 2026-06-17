@@ -278,9 +278,11 @@ final class PublishOrchestrator {
                         if build.processingState == .valid {
                             state.processingPhase = .valid
                             state.appendLog("✓ İşleme tamamlandı (VALID)", kind: .info)
-                            // Write the TestFlight "What to Test" note (best-effort,
-                            // never fails the watch) before any App Store attach.
+                            // Write the TestFlight "What to Test" note and open the
+                            // build to the picked beta groups (both best-effort —
+                            // they never fail the watch) before any App Store attach.
                             await writeTestNote(api: api)
+                            await assignBetaGroups(api: api)
                             if state.destination == .appStore {
                                 try await attachProcessedBuild(api: api, appId: app.id)
                             }
@@ -369,5 +371,27 @@ final class PublishOrchestrator {
         } catch {
             state.appendLog("⚠︎ Test notu yazılamadı: \(error.localizedDescription)", kind: .error)
         }
+    }
+
+    /// Opens the processed build to the TestFlight beta groups the user picked at
+    /// launch. Best-effort, mirroring `writeTestNote`: each group is attempted
+    /// independently and any failure only logs — it never flips `processingPhase`
+    /// (a group-assignment failure must not mark an otherwise-successful build as
+    /// failed). External groups receive the build only once it clears beta review.
+    /// Called once the build is VALID.
+    private func assignBetaGroups(api: ASCAPIClient) async {
+        guard !state.betaGroups.isEmpty, let buildId = state.uploadedBuildId else { return }
+        var assigned: [String] = []
+        for group in state.betaGroups {
+            do {
+                try await api.addBuild(buildId, toBetaGroup: group.id)
+                assigned.append(group.name)
+                let kind = group.isInternal ? "iç" : "dış"
+                state.appendLog("✓ Build '\(group.name)' grubuna eklendi (\(kind))", kind: .info)
+            } catch {
+                state.appendLog("⚠︎ '\(group.name)' grubuna eklenemedi: \(error.localizedDescription)", kind: .error)
+            }
+        }
+        state.assignedBetaGroupNames = assigned
     }
 }

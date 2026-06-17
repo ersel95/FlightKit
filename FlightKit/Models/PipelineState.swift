@@ -17,6 +17,13 @@ final class PipelineState {
     /// The TestFlight "What to Test" note to write to the build once it finishes
     /// processing (in `runProcessingWatch`). `nil`/empty means no note is written.
     let testNote: String?
+    /// TestFlight beta groups this build should be opened to. Picked at launch and
+    /// assigned automatically in `runProcessingWatch` once the build is VALID.
+    /// Empty means no automatic assignment.
+    let betaGroups: [ASCBetaGroup]
+    /// Names of the beta groups the build was actually assigned to (filled in after
+    /// processing) — surfaced in the report.
+    var assignedBetaGroupNames: [String] = []
     var stepStatuses: [PublishStep: PublishStepStatus]
     var currentStep: PublishStep?
     var logLines: [LogLine] = []
@@ -48,12 +55,13 @@ final class PipelineState {
     /// adds the attach step).
     var steps: [PublishStep] { PublishStep.steps(for: destination) }
 
-    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String, testNote: String? = nil) {
+    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String, testNote: String? = nil, betaGroups: [ASCBetaGroup] = []) {
         self.project = project
         self.destination = destination
         self.targetVersion = version
         self.targetBuildNumber = buildNumber
         self.testNote = testNote
+        self.betaGroups = betaGroups
         var initial: [PublishStep: PublishStepStatus] = [:]
         for step in PublishStep.steps(for: destination) {
             initial[step] = .pending

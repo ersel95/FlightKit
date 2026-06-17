@@ -49,6 +49,12 @@ struct ProjectDetailView: View {
     /// than one environment is targeted to suggest a build number safe across
     /// every target app at once.
     @State private var allEnvLatestBuilds: [String: Int] = [:]
+    /// TestFlight beta groups available per environment (by env name), fetched
+    /// from App Store Connect during `reload`.
+    @State private var allEnvBetaGroups: [String: [ASCBetaGroup]] = [:]
+    /// The beta group ids the user has ticked per environment (by env name).
+    /// Remembered per project across launches.
+    @State private var selectedBetaGroupIds: [String: Set<String>] = [:]
 
     /// Environments this run will publish to, in declaration order. A project
     /// with a single environment always publishes it (no picker shown); a
@@ -123,6 +129,7 @@ struct ProjectDetailView: View {
 
     private var envSelectionDefaultsKey: String { "FlightKit.envSelection.\(project.id)" }
     private var destinationDefaultsKey: String { "FlightKit.destination.\(project.id)" }
+    private func betaGroupsDefaultsKey(env: String) -> String { "FlightKit.betaGroups.\(project.id).\(env)" }
 
     /// Loads the remembered environment subset + destination for this project,
     /// dropping any environment names that no longer exist. Falls back to the
@@ -140,11 +147,24 @@ struct ProjectDetailView: View {
            let saved = DistributionTarget(rawValue: raw) {
             destination = saved
         }
+
+        // Beta group picks are remembered per environment; pruned to groups that
+        // still exist once `reload` fetches the current list.
+        var restoredGroups: [String: Set<String>] = [:]
+        for env in project.resolvedEnvironments {
+            let saved = (UserDefaults.standard.array(forKey: betaGroupsDefaultsKey(env: env.name)) as? [String]) ?? []
+            restoredGroups[env.name] = Set(saved)
+        }
+        selectedBetaGroupIds = restoredGroups
     }
 
     private func persistSelection() {
         UserDefaults.standard.set(Array(selectedEnvNames), forKey: envSelectionDefaultsKey)
         UserDefaults.standard.set(destination.rawValue, forKey: destinationDefaultsKey)
+    }
+
+    private func persistBetaGroupSelection(env: String) {
+        UserDefaults.standard.set(Array(selectedBetaGroupIds[env] ?? []), forKey: betaGroupsDefaultsKey(env: env))
     }
 
     private var header: some View {
@@ -243,6 +263,7 @@ struct ProjectDetailView: View {
                 }
             }
             testNoteInputs
+            betaGroupsInputs
             HStack {
                 Button {
                     startPipeline()
@@ -395,6 +416,90 @@ struct ProjectDetailView: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    // MARK: - TestFlight beta group input
+
+    /// The TestFlight beta group picker. One row of toggle chips per target
+    /// environment (each app has its own groups). Shown only once App Store
+    /// Connect has returned at least one group for a target env. Picking nothing
+    /// is fine — the build simply isn't auto-assigned to any group.
+    @ViewBuilder
+    private var betaGroupsInputs: some View {
+        let envsWithGroups = targetEnvironments.filter { !(allEnvBetaGroups[$0.name] ?? []).isEmpty }
+        if !envsWithGroups.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("TestFlight grupları (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                ForEach(envsWithGroups) { env in
+                    VStack(alignment: .leading, spacing: 6) {
+                        if isMultiTarget {
+                            Text(env.name).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(allEnvBetaGroups[env.name] ?? []) { group in
+                                    betaGroupChip(env: env, group: group)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("İşleme bittikten sonra build seçili gruplara otomatik atanır. Dış gruplara dağıtım, beta incelemesi tamamlandıktan sonra başlar.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// A toggle chip for one beta group within an environment.
+    @ViewBuilder
+    private func betaGroupChip(env: AppEnvironment, group: ASCBetaGroup) -> some View {
+        let isOn = (selectedBetaGroupIds[env.name] ?? []).contains(group.id)
+        Button {
+            toggleBetaGroup(env: env, group: group)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                Text(group.name)
+                Image(systemName: group.isInternal ? "lock.fill" : "person.2.fill")
+                    .font(.caption2)
+                    .opacity(0.7)
+            }
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
+                in: Capsule()
+            )
+            .foregroundStyle(isOn ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        }
+        .buttonStyle(.plain)
+        .help(group.isInternal ? "İç test grubu" : "Dış test grubu — dağıtım beta incelemesi sonrası")
+    }
+
+    // MARK: - TestFlight beta group selection
+
+    /// Drops any remembered group ids that no longer exist on the freshly-fetched
+    /// list, so a deleted group never lingers as a phantom selection.
+    private func pruneBetaGroupSelection() {
+        for (envName, groups) in allEnvBetaGroups {
+            let existing = Set(groups.map(\.id))
+            selectedBetaGroupIds[envName] = (selectedBetaGroupIds[envName] ?? []).intersection(existing)
+        }
+    }
+
+    private func toggleBetaGroup(env: AppEnvironment, group: ASCBetaGroup) {
+        var set = selectedBetaGroupIds[env.name] ?? []
+        if set.contains(group.id) { set.remove(group.id) } else { set.insert(group.id) }
+        selectedBetaGroupIds[env.name] = set
+        persistBetaGroupSelection(env: env.name)
+    }
+
+    /// The beta groups that will actually be assigned for `env` once its build
+    /// processes — the ticked subset of that env's available groups.
+    private func effectiveBetaGroups(for env: AppEnvironment) -> [ASCBetaGroup] {
+        let selected = selectedBetaGroupIds[env.name] ?? []
+        return (allEnvBetaGroups[env.name] ?? []).filter { selected.contains($0.id) }
+    }
+
     /// Whether the version/build inputs are complete enough to start a run.
     private var buildInputsValid: Bool {
         guard !marketingVersion.isEmpty, !targetEnvironments.isEmpty else { return false }
@@ -420,6 +525,7 @@ struct ProjectDetailView: View {
         var latestTF: ASCBuild?
         var latestLive: ASCAppStoreVersion?
         var allEnvLatestBuilds: [String: Int] = [:]
+        var betaGroupsByEnv: [String: [ASCBetaGroup]] = [:]
     }
 
     @MainActor
@@ -431,6 +537,7 @@ struct ProjectDetailView: View {
         latestTF = nil
         latestLive = nil
         allEnvLatestBuilds = [:]
+        allEnvBetaGroups = [:]
 
         // The local read shells out to xcodebuild (which resolves SPM packages —
         // slow on heavy projects). Run it concurrently with the ASC network calls
@@ -442,6 +549,8 @@ struct ProjectDetailView: View {
             latestTF = asc.latestTF
             latestLive = asc.latestLive
             allEnvLatestBuilds = asc.allEnvLatestBuilds
+            allEnvBetaGroups = asc.betaGroupsByEnv
+            pruneBetaGroupSelection()
         }
         local = try? await localInfo
         suggestNext()
@@ -461,10 +570,13 @@ struct ProjectDetailView: View {
                 if let n = build.flatMap({ Int($0.preReleaseVersion) }) {
                     state.allEnvLatestBuilds[env.name] = n
                 }
+                state.betaGroupsByEnv[env.name] = (try? await api.betaGroups(appId: app.id)) ?? []
             }
-        } else if let app = try? await api.findApp(bundleId: effectiveProject.bundleIdentifier) {
+        } else if let env = targetEnvironments.first,
+                  let app = try? await api.findApp(bundleId: effectiveProject.bundleIdentifier) {
             state.latestTF = try? await api.latestBuild(appId: app.id)
             state.latestLive = try? await api.latestAppStoreVersion(appId: app.id)
+            state.betaGroupsByEnv[env.name] = (try? await api.betaGroups(appId: app.id)) ?? []
         }
         return state
     }
@@ -507,7 +619,7 @@ struct ProjectDetailView: View {
         let envs = targetEnvironments
         guard !envs.isEmpty else { return }
         let states = envs.map {
-            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0), testNote: effectiveTestNote(for: $0))
+            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0), testNote: effectiveTestNote(for: $0), betaGroups: effectiveBetaGroups(for: $0))
         }
         let batch = PipelineBatch(states: states)
         pipelineBatch = batch

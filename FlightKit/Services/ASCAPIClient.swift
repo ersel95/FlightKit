@@ -241,6 +241,47 @@ actor ASCAPIClient {
         try ensureOK(response, data: data)
     }
 
+    // MARK: - TestFlight beta groups
+
+    /// The *assignable* beta groups on the app record — those a build must be added
+    /// to explicitly. Groups with `hasAccessToAllBuilds` (the "default" groups that
+    /// automatically receive every build) are filtered out: assigning to them is a
+    /// no-op, so they'd only clutter the picker.
+    func betaGroups(appId: String) async throws -> [ASCBetaGroup] {
+        var components = URLComponents(string: "https://api.appstoreconnect.apple.com/v1/apps/\(appId)/betaGroups")!
+        components.queryItems = [URLQueryItem(name: "limit", value: "200")]
+        let (data, response) = try await get(components.url!)
+        try ensureOK(response, data: data)
+
+        struct Envelope: Decodable {
+            struct Item: Decodable {
+                let id: String
+                let attributes: Attrs
+                struct Attrs: Decodable {
+                    let name: String?
+                    let isInternalGroup: Bool?
+                    let hasAccessToAllBuilds: Bool?
+                }
+            }
+            let data: [Item]
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        return env.data
+            .filter { $0.attributes.hasAccessToAllBuilds != true }
+            .map {
+                ASCBetaGroup(id: $0.id, name: $0.attributes.name ?? "—", isInternal: $0.attributes.isInternalGroup ?? false)
+            }
+    }
+
+    /// Adds `buildId` to a beta group's build list — the build becomes available to
+    /// that group's testers (external groups distribute only after beta review).
+    func addBuild(_ buildId: String, toBetaGroup groupId: String) async throws {
+        let url = URL(string: "https://api.appstoreconnect.apple.com/v1/betaGroups/\(groupId)/relationships/builds")!
+        let body: [String: Any] = ["data": [["type": "builds", "id": buildId]]]
+        let (data, response) = try await send("POST", url: url, jsonBody: body)
+        try ensureOK(response, data: data)
+    }
+
     private func decodeFirstVersion(from data: Data) -> ASCAppStoreVersion? {
         struct Envelope: Decodable {
             struct Item: Decodable {

@@ -509,6 +509,20 @@ struct PipelineReportView: View {
             }
         }
 
+        if !state.betaGroups.isEmpty {
+            LabeledContent("TestFlight grupları") {
+                if state.assignedBetaGroupNames.isEmpty {
+                    Text("\(state.betaGroups.map(\.name).joined(separator: ", ")) (işleme sonrası atanacak)")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                } else {
+                    Text(state.assignedBetaGroupNames.joined(separator: ", "))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+        }
+
         if let failure = failure(for: state) {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
