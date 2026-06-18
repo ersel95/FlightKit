@@ -163,6 +163,15 @@ final class PublishOrchestrator {
 
     private func archive() async throws {
         try linkSharedSPMCacheIntoDerivedData()
+        // Record exactly which Xcode is driving the build — a mismatched/older Xcode
+        // is the usual reason a dependency (e.g. Firebase AppCheck) compiles for the
+        // developer but not here.
+        if let dev = await XcodeLocator.shared.developerDirectory() {
+            state.appendLog("Xcode (DEVELOPER_DIR): \(dev)", kind: .info)
+            if let version = try? await XcodebuildRunner.run(args: ["-version"], onLine: { _, _ in }) {
+                state.appendLog(version.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines), kind: .info)
+            }
+        }
         let logState = state
         let result = try await XcodebuildRunner.run(
             args: project.xcodebuildContainerArguments + [

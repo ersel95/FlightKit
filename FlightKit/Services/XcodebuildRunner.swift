@@ -196,7 +196,8 @@ actor XcodeLocator {
 
     private static func locate() async -> String? {
         // 1. Whatever the current toolchain already resolves (a correct xcode-select
-        //    or an inherited DEVELOPER_DIR). Derive the Developer dir from the path.
+        //    or an inherited DEVELOPER_DIR) wins — that's the developer's explicit
+        //    choice. Derive the Developer dir from the resolved xcodebuild path.
         if let found = try? await XcodebuildRunner.runProcess(
             executable: "/usr/bin/xcrun", args: ["--find", "xcodebuild"], onLine: { _, _ in }
         ), found.exitCode == 0 {
@@ -207,19 +208,43 @@ actor XcodeLocator {
                     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
             }
         }
-        // 2. The standard Xcode location.
+        // 2. No usable toolchain selected (xcode-select on Command Line Tools, etc.).
+        //    Gather every Xcode we can find and pick the NEWEST — picking an old Xcode
+        //    is a common cause of dependencies (e.g. Firebase) failing to compile.
+        var candidates = Set<String>()
         let standard = "/Applications/Xcode.app/Contents/Developer"
-        if FileManager.default.fileExists(atPath: standard + "/usr/bin/xcodebuild") { return standard }
-        // 3. Any Xcode Spotlight knows about (non-standard name or location).
+        if FileManager.default.fileExists(atPath: standard + "/usr/bin/xcodebuild") { candidates.insert(standard) }
         if let hits = try? await XcodebuildRunner.runProcess(
             executable: "/usr/bin/mdfind",
             args: ["kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"], onLine: { _, _ in }
         ), hits.exitCode == 0 {
             for line in hits.combinedLog.split(whereSeparator: { $0.isNewline }) {
                 let dir = String(line).trimmingCharacters(in: .whitespaces) + "/Contents/Developer"
-                if FileManager.default.fileExists(atPath: dir + "/usr/bin/xcodebuild") { return dir }
+                if FileManager.default.fileExists(atPath: dir + "/usr/bin/xcodebuild") { candidates.insert(dir) }
             }
         }
-        return nil
+        var best: (dir: String, version: [Int])?
+        for dir in candidates {
+            let version = await xcodeVersion(developerDir: dir)
+            if let current = best {
+                if current.version.lexicographicallyPrecedes(version) { best = (dir, version) }
+            } else {
+                best = (dir, version)
+            }
+        }
+        return best?.dir ?? candidates.first
+    }
+
+    /// `[major, minor]` of the Xcode at `developerDir`, or `[0]` if unreadable —
+    /// used to pick the newest among several installed Xcodes.
+    private static func xcodeVersion(developerDir: String) async -> [Int] {
+        guard let result = try? await XcodebuildRunner.runProcess(
+            executable: developerDir + "/usr/bin/xcodebuild", args: ["-version"], onLine: { _, _ in }
+        ), result.exitCode == 0 else { return [0] }
+        // First line looks like "Xcode 16.2".
+        let first = result.combinedLog.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+        let digits = first.replacingOccurrences(of: "Xcode", with: "").trimmingCharacters(in: .whitespaces)
+        let parts = digits.split(separator: ".").compactMap { Int($0) }
+        return parts.isEmpty ? [0] : parts
     }
 }
