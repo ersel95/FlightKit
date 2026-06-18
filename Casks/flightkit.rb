@@ -1,6 +1,6 @@
 cask "flightkit" do
-  version "1.0.9"
-  sha256 "0e038e08c6d7d212d20f8ffa1939929a1eae6e677d5b414631b16c029a273179"
+  version "1.0.10"
+  sha256 "a8f44a1644bcb45b1fcb26603b9c852cb0d977e664c3a2a3d03ca8b6e198be50"
 
   url "https://github.com/ersel95/FlightKit/releases/download/v#{version}/FlightKit-#{version}.dmg"
   name "FlightKit"
