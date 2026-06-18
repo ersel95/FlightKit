@@ -6,6 +6,24 @@
 //
 
 import Foundation
+import os
+
+/// Accumulates a readable transcript of an auto-scan. Sequential (one task, appended
+/// between `await`s) so a plain array needs no locking; `@unchecked Sendable` only so
+/// it can be captured across the `async` calls.
+private final class DiagnosticLog: @unchecked Sendable {
+    private var lines: [String] = []
+    func log(_ line: String) { lines.append(line) }
+    var text: String { lines.joined(separator: "\n") }
+    func emitToConsole() {
+        Logger(subsystem: "com.flightkit.app", category: "inspect").log("Auto-scan transcript:\n\(self.text, privacy: .public)")
+    }
+}
+
+private extension String {
+    /// `self` unless empty, in which case `fallback` — keeps diagnostic lines readable.
+    func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
+}
 
 /// What auto-fill extracts from a selected `.xcworkspace` / `.xcodeproj`.
 struct ProjectInspection {
@@ -16,6 +34,11 @@ struct ProjectInspection {
     /// One environment per build configuration (name = configuration), each with
     /// the bundle id that configuration resolves to.
     var environments: [AppEnvironment]
+    /// Human-readable transcript of what the scan did (active developer dir, each
+    /// xcodebuild invocation + exit code, per-config bundle-id resolution). Surfaced
+    /// in the editor so a scan that came back empty on another machine can be
+    /// diagnosed instead of failing silently.
+    var diagnostics: String = ""
 }
 
 /// Reads project metadata via `xcodebuild` — current version (for the detail view)
@@ -53,14 +76,26 @@ enum ProjectInspector {
     static func inspect(containerURL: URL) async throws -> ProjectInspection {
         let containerArgs = containerArguments(for: containerURL)
         let cache = spmCachePath
+        let diag = DiagnosticLog()
+
+        // A GUI app launched from Finder/Dock inherits launchd's minimal environment,
+        // not the developer's shell. `xcrun xcodebuild` still works *if* a full Xcode
+        // is selected — but on a machine with only Command Line Tools (or no Xcode),
+        // it fails. This is the classic "auto-scan works on my Mac, nowhere else"
+        // cause, so verify up front and throw an actionable error instead of letting
+        // every later xcodebuild call quietly return nothing.
+        try await verifyDeveloperTools(diag)
 
         let listing = try await XcodebuildRunner.list(containerArguments: containerArgs, clonedSourcePackagesPath: cache)
+        diag.log("xcodebuild -list → \(listing.schemes.count) scheme(s): \(listing.schemes.joined(separator: ", ").ifEmpty("∅")); \(listing.configurations.count) configuration(s): \(listing.configurations.joined(separator: ", ").ifEmpty("∅"))")
         guard let scheme = pickScheme(listing.schemes, container: containerURL) else {
+            diag.log("No scheme returned by xcodebuild -list.")
             throw PublishError.ascAPIError(
                 status: 0,
-                body: "No shared scheme found in \(containerURL.lastPathComponent). In Xcode → Product → Scheme → Manage Schemes, tick 'Shared'."
+                body: "No shared scheme found in \(containerURL.lastPathComponent). In Xcode → Product → Scheme → Manage Schemes, tick 'Shared'.\n\n\(diag.text)"
             )
         }
+        diag.log("Using scheme: \(scheme)")
 
         // Configurations: present for projects; for workspaces fall back to the
         // primary member project's list.
@@ -68,10 +103,12 @@ enum ProjectInspector {
         if configurations.isEmpty,
            containerURL.pathExtension.lowercased() == "xcworkspace",
            let primary = primaryProject(in: containerURL) {
+            diag.log("Workspace exposes no configurations; reading primary project \(primary.lastPathComponent).")
             configurations = (try? await XcodebuildRunner.list(
                 containerArguments: ["-project", primary.path],
                 clonedSourcePackagesPath: cache
             ).configurations) ?? []
+            diag.log("Primary project configurations: \(configurations.joined(separator: ", ").ifEmpty("∅"))")
         }
 
         var environments: [AppEnvironment] = []
@@ -81,29 +118,76 @@ enum ProjectInspector {
         // nil = let xcodebuild pick the scheme's default config (when none enumerated).
         let configsToProbe: [String?] = configurations.isEmpty ? [nil] : configurations.map { $0 }
         for config in configsToProbe {
-            guard let settings = try? await XcodebuildRunner.showBuildSettings(
-                containerArguments: containerArgs,
-                scheme: scheme,
-                configuration: config,
-                clonedSourcePackagesPath: cache
-            ) else { continue }
-
-            let resolvedConfig = config ?? settings["CONFIGURATION"] ?? "Release"
-            let bundleId = settings["PRODUCT_BUNDLE_IDENTIFIER"] ?? ""
-            guard !bundleId.isEmpty else { continue }
-
-            environments.append(AppEnvironment(name: resolvedConfig, configuration: resolvedConfig, bundleIdentifier: bundleId))
-            if teamId.isEmpty, let team = settings["DEVELOPMENT_TEAM"], !team.isEmpty { teamId = team }
-            if let product = settings["PRODUCT_NAME"], !product.isEmpty { displayName = product }
+            let label = config ?? "(scheme default)"
+            do {
+                let settings = try await XcodebuildRunner.showBuildSettings(
+                    containerArguments: containerArgs,
+                    scheme: scheme,
+                    configuration: config,
+                    clonedSourcePackagesPath: cache
+                )
+                let resolvedConfig = config ?? settings["CONFIGURATION"] ?? "Release"
+                let bundleId = settings["PRODUCT_BUNDLE_IDENTIFIER"] ?? ""
+                guard !bundleId.isEmpty else {
+                    diag.log("\(label): no PRODUCT_BUNDLE_IDENTIFIER in build settings — skipped.")
+                    continue
+                }
+                diag.log("\(label) → \(resolvedConfig): \(bundleId)")
+                environments.append(AppEnvironment(name: resolvedConfig, configuration: resolvedConfig, bundleIdentifier: bundleId))
+                if teamId.isEmpty, let team = settings["DEVELOPMENT_TEAM"], !team.isEmpty { teamId = team }
+                if let product = settings["PRODUCT_NAME"], !product.isEmpty { displayName = product }
+            } catch {
+                diag.log("\(label): showBuildSettings failed — \(error.localizedDescription)")
+            }
         }
+
+        if environments.isEmpty {
+            diag.log("No environments resolved — review the transcript above for the failing step.")
+        }
+        diag.emitToConsole()
 
         return ProjectInspection(
             displayName: displayName,
             schemes: listing.schemes,
             suggestedScheme: scheme,
             teamId: teamId,
-            environments: environments
+            environments: environments,
+            diagnostics: diag.text
         )
+    }
+
+    /// Confirm a full Xcode is active before running any scan. Records `xcode-select -p`
+    /// and `xcrun --find xcodebuild`; throws a clear, copy-pasteable fix when xcodebuild
+    /// can't be located (no Xcode, or only Command Line Tools selected).
+    private static func verifyDeveloperTools(_ diag: DiagnosticLog) async throws {
+        let selected = try? await XcodebuildRunner.runProcess(
+            executable: "/usr/bin/xcode-select", args: ["-p"], onLine: { _, _ in }
+        )
+        let activeDir = selected?.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        diag.log("xcode-select -p → \(activeDir.ifEmpty("(unset)"))")
+
+        let find = try? await XcodebuildRunner.runProcess(
+            executable: "/usr/bin/xcrun", args: ["--find", "xcodebuild"], onLine: { _, _ in }
+        )
+        let foundPath = find?.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if (find?.exitCode ?? 1) != 0 || foundPath.isEmpty || !FileManager.default.fileExists(atPath: foundPath) {
+            diag.log("xcrun --find xcodebuild failed: \(foundPath.ifEmpty(find?.combinedLog ?? "not found"))")
+            throw PublishError.ascAPIError(
+                status: 0,
+                body: """
+                Xcode command-line tools aren't usable on this Mac, so the project can't be auto-scanned.
+
+                Active developer directory: \(activeDir.ifEmpty("(none)"))
+
+                Install the full Xcode from the App Store, then point the tools at it:
+                  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+                (Command Line Tools alone don't include xcodebuild.)
+
+                You can still add the app manually below.
+                """
+            )
+        }
+        diag.log("xcodebuild found at: \(foundPath)")
     }
 
     /// Prefer a scheme matching the container's base name (the common case), else

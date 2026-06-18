@@ -32,6 +32,7 @@ struct ProjectDetailView: View {
     /// "her ortam için ayrı" setting is active.
     @State private var perEnvTestNotes: [String: String] = [:]
     @State private var showCredentialsSheet = false
+    @State private var showBuildAdmin = false
 
     /// Whether the build number is asked for each run (vs. auto-sending `1`).
     @AppStorage(AppSettings.buildNumberManagedKey) private var buildNumberManaged = true
@@ -123,6 +124,13 @@ struct ProjectDetailView: View {
             PipelineView(batch: batch)
                 .frame(minWidth: 720, minHeight: 540)
         }
+        .sheet(isPresented: $showBuildAdmin) {
+            if let credentials {
+                BuildAdminView(project: project, credentials: credentials) {
+                    showBuildAdmin = false
+                }
+            }
+        }
     }
 
     // MARK: - Per-project remembered selection
@@ -183,6 +191,14 @@ struct ProjectDetailView: View {
                     Label(credentials == nil ? "Configure API key" : "Edit API key", systemImage: "key.fill")
                 }
                 .buttonStyle(.bordered)
+                Button {
+                    showBuildAdmin = true
+                } label: {
+                    Label("Build'ler", systemImage: "shippingbox")
+                }
+                .buttonStyle(.bordered)
+                .disabled(credentials == nil)
+                .help(credentials == nil ? "Önce API anahtarını yapılandırın" : "Build'leri listele ve App Store Connect verilerini düzenle")
                 if isLoading {
                     ProgressView().controlSize(.small)
                 } else {

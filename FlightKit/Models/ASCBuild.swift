@@ -14,6 +14,10 @@ struct ASCBuild: Identifiable, Hashable {
     let processingState: ProcessingState
     let uploadedDate: Date?
     let expired: Bool
+    /// Export-compliance answer recorded on the build. `nil` = not yet answered
+    /// (App Store Connect shows "Missing Compliance" and blocks TestFlight until
+    /// it's set). `true`/`false` map to "uses non-exempt encryption".
+    var usesNonExemptEncryption: Bool? = nil
 
     enum ProcessingState: String, Hashable {
         case processing = "PROCESSING"
@@ -39,6 +43,7 @@ struct ASCAppStoreVersion: Hashable {
     let id: String
     let versionString: String
     let appStoreState: String
+    var copyright: String = ""
 }
 
 struct ASCApp: Hashable {
@@ -55,4 +60,8 @@ struct ASCBetaGroup: Identifiable, Hashable {
     let id: String
     let name: String
     let isInternal: Bool
+    /// "Default" groups that automatically receive *every* build. Assigning a build
+    /// to one is a no-op, so the publish picker hides them — but the build admin
+    /// screen still surfaces them read-only so its membership matches ASC.
+    var hasAccessToAllBuilds: Bool = false
 }

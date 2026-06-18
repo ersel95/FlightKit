@@ -30,6 +30,7 @@ struct ProjectEditorView: View {
     @State private var environments: [AppEnvironment]
     @State private var availableSchemes: [String] = []
     @State private var scanWarning: String?
+    @State private var scanDiagnostics: String = ""
     @State private var error: String?
 
     init(store: ProjectStore, existing: AppProject?, onDone: @escaping (AppProject?) -> Void) {
@@ -138,17 +139,36 @@ struct ProjectEditorView: View {
                 } header: {
                     Text("App")
                 } footer: {
-                    if let scanWarning {
-                        Label(scanWarning, systemImage: "exclamationmark.triangle")
-                            .font(.caption2).foregroundStyle(.orange)
-                    } else {
-                        Label("Auto-scanned — review and edit anything below before saving.", systemImage: "sparkles")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let scanWarning {
+                            Label(scanWarning, systemImage: "exclamationmark.triangle")
+                                .font(.caption2).foregroundStyle(.orange)
+                        } else {
+                            Label("Auto-scanned — review and edit anything below before saving.", systemImage: "sparkles")
+                                .font(.caption2)
+                        }
+                        if !scanDiagnostics.isEmpty {
+                            DisclosureGroup("Scan details") {
+                                ScrollView {
+                                    Text(scanDiagnostics)
+                                        .font(.caption2.monospaced())
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxHeight: 160)
+                            }
                             .font(.caption2)
+                        }
                     }
                 }
                 Section {
-                    ForEach($environments) { $env in
-                        environmentRow($env)
+                    // Index-based identity: AppEnvironment.id is derived from `name`,
+                    // so binding the ForEach to it would change a row's identity on
+                    // every keystroke (and collide for blank names), recreating the
+                    // row and stealing TextField focus. Indices are stable while
+                    // editing — the count only changes on add/delete.
+                    ForEach(environments.indices, id: \.self) { index in
+                        environmentRow($environments[index])
                     }
                     .onDelete { environments.remove(atOffsets: $0) }
                     Button {
@@ -238,14 +258,16 @@ struct ProjectEditorView: View {
             teamId = result.teamId
             if !result.environments.isEmpty { environments = result.environments }
             scanWarning = result.environments.isEmpty
-                ? "No build configurations were detected — add environments manually."
+                ? "No build configurations were detected — add environments manually. Open 'Scan details' below to see why."
                 : nil
+            scanDiagnostics = result.diagnostics
             error = nil
         } catch {
             availableSchemes = []
             displayName = url.deletingPathExtension().lastPathComponent
             schemeName = url.deletingPathExtension().lastPathComponent
             scanWarning = "Couldn't auto-read the project — fill the fields manually. (\(error.localizedDescription))"
+            scanDiagnostics = ""
         }
         phase = .review
     }

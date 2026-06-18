@@ -25,6 +25,7 @@ SOURCES = [
     ("Models/ASCCredentials.swift", "Models"),
     ("Models/BuildVersionInfo.swift", "Models"),
     ("Models/ASCBuild.swift", "Models"),
+    ("Models/ASCAdminModels.swift", "Models"),
     ("Models/PublishStep.swift", "Models"),
     ("Models/PipelineState.swift", "Models"),
     ("Models/PublishError.swift", "Models"),
@@ -47,6 +48,7 @@ SOURCES = [
     ("Views/ProjectDetailView.swift", "Views"),
     ("Views/CredentialsEditor.swift", "Views"),
     ("Views/PipelineView.swift", "Views"),
+    ("Views/BuildAdminView.swift", "Views"),
     ("Views/UpdaterView.swift", "Views"),
     ("Views/SettingsView.swift", "Views"),
 ]
