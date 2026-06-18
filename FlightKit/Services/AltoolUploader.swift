@@ -25,6 +25,12 @@ enum AltoolUploader {
         let keyURL = keyDir.appending(path: "AuthKey_\(credentials.keyId).p8")
         try credentials.privateKeyPEM.write(to: keyURL, atomically: true, encoding: .utf8)
 
+        // altool ships inside Xcode too, so a Finder-launched app needs the resolved
+        // DEVELOPER_DIR here as well (see XcodeLocator) — otherwise xcrun can't find it.
+        var environment = ["API_PRIVATE_KEYS_DIR": keyDir.path]
+        if let dev = await XcodeLocator.shared.developerDirectory() {
+            environment["DEVELOPER_DIR"] = dev
+        }
         let result = try await XcodebuildRunner.runProcess(
             executable: "/usr/bin/xcrun",
             args: [
@@ -36,7 +42,7 @@ enum AltoolUploader {
                 "--apiIssuer", credentials.issuerId,
                 "--output-format", "normal",
             ],
-            environment: ["API_PRIVATE_KEYS_DIR": keyDir.path],
+            environment: environment,
             onLine: onLine
         )
         guard result.exitCode == 0 else {

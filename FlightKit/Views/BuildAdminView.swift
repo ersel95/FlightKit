@@ -269,6 +269,13 @@ struct BuildAdminView: View {
                         }
                         .controlSize(.small)
                     }
+                    CommitSuggestionPanel(
+                        repoURL: project.workspaceRoot,
+                        since: previousBuildDate(before: build),
+                        until: build.uploadedDate
+                    ) { text in
+                        appendToTestNotes(text)
+                    }
                 }
 
                 // Beta groups
@@ -419,6 +426,21 @@ struct BuildAdminView: View {
         testNotes = (try? await api.betaBuildLocalizationsDetailed(buildId: build.id)) ?? []
         buildGroupIds = (try? await api.betaGroupIds(forBuild: build.id)) ?? []
         buildTesters = (try? await api.individualTesters(forBuild: build.id)) ?? []
+    }
+
+    /// The upload date of the build immediately preceding `build` (the next-older one
+    /// in the date-sorted list) — the start of the "what changed since last build"
+    /// window for commit suggestions.
+    private func previousBuildDate(before build: ASCBuild) -> Date? {
+        guard let index = builds.firstIndex(where: { $0.id == build.id }) else { return nil }
+        return builds[(index + 1)...].first?.uploadedDate
+    }
+
+    /// Append suggestion text into every locale's "What to Test" editor.
+    private func appendToTestNotes(_ text: String) {
+        for index in testNotes.indices {
+            testNotes[index].whatsNew = TestNoteText.append(text, to: testNotes[index].whatsNew)
+        }
     }
 
     /// Re-fetch the build list (e.g. after compliance/expire) while keeping the

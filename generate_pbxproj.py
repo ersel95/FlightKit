@@ -42,6 +42,7 @@ SOURCES = [
     ("Services/PublishOrchestrator.swift", "Services"),
     ("Services/ProjectStore.swift", "Services"),
     ("Services/ProjectInspector.swift", "Services"),
+    ("Services/GitChangeInspector.swift", "Services"),
     ("Views/ContentView.swift", "Views"),
     ("Views/ProjectListView.swift", "Views"),
     ("Views/ProjectEditorView.swift", "Views"),
@@ -49,6 +50,7 @@ SOURCES = [
     ("Views/CredentialsEditor.swift", "Views"),
     ("Views/PipelineView.swift", "Views"),
     ("Views/BuildAdminView.swift", "Views"),
+    ("Views/CommitSuggestionPanel.swift", "Views"),
     ("Views/UpdaterView.swift", "Views"),
     ("Views/SettingsView.swift", "Views"),
 ]

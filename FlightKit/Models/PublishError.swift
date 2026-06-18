@@ -19,6 +19,7 @@ enum PublishError: LocalizedError {
     case keychainError(OSStatus)
     case unfixableAfterRetry(stage: String, lastError: String)
     case timeout(stage: String)
+    case toolingUnavailable(activeDir: String)
 
     var errorDescription: String? {
         switch self {
@@ -44,6 +45,13 @@ enum PublishError: LocalizedError {
             return "Auto-fix failed at \(stage). Last error: \(last.suffix(400))"
         case .timeout(let stage):
             return "Stage timed out: \(stage)"
+        case .toolingUnavailable(let dir):
+            return """
+            Xcode bu Mac'te kullanılamıyor — archive yapılamaz (aktif geliştirici dizini: \(dir)).
+            App Store'dan tam Xcode'u kurun, sonra şunu çalıştırın:
+              sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+            (Yalnızca Command Line Tools, xcodebuild içermez.)
+            """
         }
     }
 }

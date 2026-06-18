@@ -156,9 +156,10 @@ enum ProjectInspector {
         )
     }
 
-    /// Confirm a full Xcode is active before running any scan. Records `xcode-select -p`
-    /// and `xcrun --find xcodebuild`; throws a clear, copy-pasteable fix when xcodebuild
-    /// can't be located (no Xcode, or only Command Line Tools selected).
+    /// Confirm an Xcode can be located before scanning. Uses the same resolver the
+    /// build runner uses (which injects DEVELOPER_DIR), so a misconfigured
+    /// `xcode-select` doesn't block a scan as long as an Xcode exists anywhere. Throws
+    /// a copy-pasteable fix only when no Xcode is found at all.
     private static func verifyDeveloperTools(_ diag: DiagnosticLog) async throws {
         let selected = try? await XcodebuildRunner.runProcess(
             executable: "/usr/bin/xcode-select", args: ["-p"], onLine: { _, _ in }
@@ -166,28 +167,23 @@ enum ProjectInspector {
         let activeDir = selected?.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         diag.log("xcode-select -p → \(activeDir.ifEmpty("(unset)"))")
 
-        let find = try? await XcodebuildRunner.runProcess(
-            executable: "/usr/bin/xcrun", args: ["--find", "xcodebuild"], onLine: { _, _ in }
-        )
-        let foundPath = find?.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if (find?.exitCode ?? 1) != 0 || foundPath.isEmpty || !FileManager.default.fileExists(atPath: foundPath) {
-            diag.log("xcrun --find xcodebuild failed: \(foundPath.ifEmpty(find?.combinedLog ?? "not found"))")
+        guard let developerDir = await XcodeLocator.shared.developerDirectory() else {
+            diag.log("No Xcode could be located (xcode-select, /Applications, Spotlight all empty).")
             throw PublishError.ascAPIError(
                 status: 0,
                 body: """
-                Xcode command-line tools aren't usable on this Mac, so the project can't be auto-scanned.
+                Bu Mac'te kullanılabilir bir Xcode bulunamadı, bu yüzden proje otomatik taranamıyor.
 
-                Active developer directory: \(activeDir.ifEmpty("(none)"))
+                Aktif geliştirici dizini: \(activeDir.ifEmpty("(yok)"))
 
-                Install the full Xcode from the App Store, then point the tools at it:
+                App Store'dan tam Xcode'u kurun (kuruluysa şunu çalıştırın):
                   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-                (Command Line Tools alone don't include xcodebuild.)
 
-                You can still add the app manually below.
+                Uygulamayı aşağıdan elle de ekleyebilirsiniz.
                 """
             )
         }
-        diag.log("xcodebuild found at: \(foundPath)")
+        diag.log("Using Xcode: \(developerDir)")
     }
 
     /// Prefer a scheme matching the container's base name (the common case), else

@@ -20,7 +20,15 @@ enum XcodebuildRunner {
         environment: [String: String]? = nil,
         onLine: @Sendable @escaping (String, Bool) -> Void
     ) async throws -> XcodebuildResult {
-        try await runProcess(executable: "/usr/bin/xcrun", args: ["xcodebuild"] + args, environment: environment, onLine: onLine)
+        // A Finder-launched app inherits launchd's environment, not the shell — so a
+        // shell-set DEVELOPER_DIR is absent and xcode-select may point at Command Line
+        // Tools (no xcodebuild) even on an active dev's Mac. Resolve a concrete Xcode
+        // and pass DEVELOPER_DIR explicitly so xcrun finds xcodebuild regardless.
+        var env = environment ?? [:]
+        if env["DEVELOPER_DIR"] == nil, let dev = await XcodeLocator.shared.developerDirectory() {
+            env["DEVELOPER_DIR"] = dev
+        }
+        return try await runProcess(executable: "/usr/bin/xcrun", args: ["xcodebuild"] + args, environment: env, onLine: onLine)
     }
 
     static func runProcess(
@@ -78,6 +86,19 @@ enum XcodebuildRunner {
             } catch {
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    /// Verifies an Xcode can be located so `xcrun xcodebuild` resolves (via the
+    /// auto-injected DEVELOPER_DIR). Throws an actionable error only when *no* Xcode
+    /// exists anywhere — not merely when xcode-select points at Command Line Tools.
+    /// The publish pipeline calls this up front so a missing toolchain fails fast
+    /// instead of dying deep in the archive with a cryptic xcrun exit 72.
+    static func ensureXcodebuildAvailable() async throws {
+        guard await XcodeLocator.shared.developerDirectory() != nil else {
+            let active = (try? await runProcess(executable: "/usr/bin/xcode-select", args: ["-p"], onLine: { _, _ in }))?
+                .combinedLog.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PublishError.toolingUnavailable(activeDir: (active?.isEmpty == false ? active! : "(seçili değil)"))
         }
     }
 
@@ -153,4 +174,52 @@ private final class LogBuffer: @unchecked Sendable {
     private var storage = ""
     func append(_ text: String) { lock.lock(); storage += text; lock.unlock() }
     func snapshot() -> String { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
+/// Locates a usable Xcode `Developer` directory for command-line builds, caching the
+/// result for the session. A Finder-launched GUI app doesn't inherit the shell's
+/// `DEVELOPER_DIR`, and `xcode-select` may point at Command Line Tools (which lack
+/// xcodebuild) even on an active developer's Mac — so FlightKit resolves a concrete
+/// Xcode itself and passes it as `DEVELOPER_DIR`, rather than trusting the inherited
+/// environment. Returns nil only when no Xcode exists anywhere.
+actor XcodeLocator {
+    static let shared = XcodeLocator()
+    private var resolved = false
+    private var developerDir: String?
+
+    func developerDirectory() async -> String? {
+        if resolved { return developerDir }
+        developerDir = await Self.locate()
+        resolved = true
+        return developerDir
+    }
+
+    private static func locate() async -> String? {
+        // 1. Whatever the current toolchain already resolves (a correct xcode-select
+        //    or an inherited DEVELOPER_DIR). Derive the Developer dir from the path.
+        if let found = try? await XcodebuildRunner.runProcess(
+            executable: "/usr/bin/xcrun", args: ["--find", "xcodebuild"], onLine: { _, _ in }
+        ), found.exitCode == 0 {
+            let path = found.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+                // .../Developer/usr/bin/xcodebuild → .../Developer
+                return URL(fileURLWithPath: path)
+                    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
+            }
+        }
+        // 2. The standard Xcode location.
+        let standard = "/Applications/Xcode.app/Contents/Developer"
+        if FileManager.default.fileExists(atPath: standard + "/usr/bin/xcodebuild") { return standard }
+        // 3. Any Xcode Spotlight knows about (non-standard name or location).
+        if let hits = try? await XcodebuildRunner.runProcess(
+            executable: "/usr/bin/mdfind",
+            args: ["kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"], onLine: { _, _ in }
+        ), hits.exitCode == 0 {
+            for line in hits.combinedLog.split(whereSeparator: { $0.isNewline }) {
+                let dir = String(line).trimmingCharacters(in: .whitespaces) + "/Contents/Developer"
+                if FileManager.default.fileExists(atPath: dir + "/usr/bin/xcodebuild") { return dir }
+            }
+        }
+        return nil
+    }
 }

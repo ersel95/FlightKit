@@ -114,6 +114,10 @@ final class PublishOrchestrator {
     // MARK: - Steps
 
     private func validate() async throws {
+        // Fail fast with an actionable message when this Mac has no usable full Xcode
+        // (only Command Line Tools / none) — otherwise the archive dies later with a
+        // cryptic xcrun exit 72.
+        try await XcodebuildRunner.ensureXcodebuildAvailable()
         let versionRegex = try NSRegularExpression(pattern: #"^\d+\.\d+(?:\.\d+)?$"#)
         let v = state.targetVersion
         guard versionRegex.firstMatch(in: v, range: NSRange(v.startIndex..., in: v)) != nil else {

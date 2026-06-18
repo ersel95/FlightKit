@@ -389,20 +389,43 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private var testNoteInputs: some View {
         if testNoteManaged {
-            if testNoteShared {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Test notu (opsiyonel)").font(.caption).foregroundStyle(.secondary)
-                    testNoteEditor(text: $testNote)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(targetEnvironments) { env in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Test notu · \(env.name) (opsiyonel)").font(.caption).foregroundStyle(.secondary)
-                            testNoteEditor(text: perEnvNoteBinding(env))
+            VStack(alignment: .leading, spacing: 8) {
+                if testNoteShared {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Test notu (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                        testNoteEditor(text: $testNote)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(targetEnvironments) { env in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Test notu · \(env.name) (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                                testNoteEditor(text: perEnvNoteBinding(env))
+                            }
                         }
                     }
                 }
+                // Suggest from what changed since the latest existing build was uploaded.
+                CommitSuggestionPanel(
+                    repoURL: project.workspaceRoot,
+                    since: latestTF?.uploadedDate,
+                    until: nil
+                ) { text in
+                    appendToTestNote(text)
+                }
+                .frame(maxWidth: 420, alignment: .leading)
+            }
+        }
+    }
+
+    /// Append commit-suggestion text into the active note field(s) — the shared note
+    /// when shared, otherwise every targeted environment's per-env note.
+    private func appendToTestNote(_ text: String) {
+        if testNoteShared {
+            testNote = TestNoteText.append(text, to: testNote)
+        } else {
+            for env in targetEnvironments {
+                perEnvTestNotes[env.name] = TestNoteText.append(text, to: perEnvTestNotes[env.name] ?? "")
             }
         }
     }
@@ -583,7 +606,10 @@ struct ProjectDetailView: View {
                 guard let app = try? await api.findApp(bundleId: env.bundleIdentifier) else { continue }
                 let build = try? await api.latestBuild(appId: app.id)
                 state.latestTF = build ?? state.latestTF
-                if let n = build.flatMap({ Int($0.preReleaseVersion) }) {
+                // `version` is the build number (e.g. 291); `preReleaseVersion` is the
+                // marketing version (e.g. "1.0.3"). The next build must clear the
+                // latest *build number*, so read `version` here.
+                if let n = build.flatMap({ Int($0.version) }) {
                     state.allEnvLatestBuilds[env.name] = n
                 }
                 state.betaGroupsByEnv[env.name] = (try? await api.betaGroups(appId: app.id)) ?? []
@@ -599,7 +625,7 @@ struct ProjectDetailView: View {
 
     private func suggestNext() {
         if marketingVersion.isEmpty {
-            marketingVersion = local?.marketingVersion ?? latestTF?.version ?? "1.0.0"
+            marketingVersion = local?.marketingVersion ?? latestTF?.preReleaseVersion ?? "1.0.0"
         }
         guard buildNumberManaged else { return } // unmanaged → always 1, nothing to suggest
         if buildNumberShared {
@@ -608,7 +634,7 @@ struct ProjectDetailView: View {
                 // app's latest, otherwise a mid-sweep env hits a duplicate-build rejection.
                 let ascBuilds = isMultiTarget
                     ? Array(allEnvLatestBuilds.values)
-                    : [Int(latestTF?.preReleaseVersion ?? "") ?? 0]
+                    : [Int(latestTF?.version ?? "") ?? 0]
                 let candidates = ascBuilds + [Int(local?.buildNumber ?? "0") ?? 0]
                 buildNumber = String((candidates.max() ?? 0) + 1)
             }
@@ -625,7 +651,7 @@ struct ProjectDetailView: View {
     private func suggestedBuild(for env: AppEnvironment) -> String {
         let ascLatest = isMultiTarget
             ? (allEnvLatestBuilds[env.name] ?? 0)
-            : (Int(latestTF?.preReleaseVersion ?? "") ?? 0)
+            : (Int(latestTF?.version ?? "") ?? 0)
         let localLatest = Int(local?.buildNumber ?? "0") ?? 0
         return String(max(ascLatest, localLatest) + 1)
     }
