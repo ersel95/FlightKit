@@ -23,7 +23,11 @@ final class PublishOrchestrator {
     private let sharedSPMCacheDir: URL
     private var ipaURL: URL?
 
-    private let maxRetriesPerStep = 2
+    // 3 attempts → up to 2 distinct heals can chain within one step (the retry loop
+    // only applies a fix while `attempt < maxRetriesPerStep`). A single archive can
+    // surface two faults in sequence on a bad cache: an incomplete SPM checkout, then a
+    // stale resource bundle — each needs its own heal before the archive finally passes.
+    private let maxRetriesPerStep = 3
 
     init(state: PipelineState, credentials: ASCCredentials) {
         self.state = state

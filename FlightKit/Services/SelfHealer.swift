@@ -69,6 +69,25 @@ struct SelfHealer {
                 }
             ),
             HealRule(
+                id: "archive-missing-resource-bundle",
+                // After the package graph changes (e.g. a checkout was just re-resolved
+                // by `spm-incomplete-checkout`), the per-run DerivedData — which is
+                // reused across publish runs — goes stale: the incremental build thinks
+                // SPM resource bundles are up-to-date while the files are actually gone,
+                // and archive dies with e.g.
+                // "lstat(.../Prod-iphoneos/nanopb_nanopb.bundle): No such file or directory".
+                // Cleaning DerivedData forces a fresh build that rebuilds the bundles. The
+                // shared SPM cache is only symlinked into DerivedData (recreated on the
+                // next archive), so wiping DerivedData never touches the resolved packages.
+                trigger: .stageAndPattern(stage: PublishStep.archive.rawValue, regex: #"lstat\([^)]*\.bundle\): No such file or directory"#),
+                humanDescription: "Cleaning stale DerivedData and re-archiving (missing resource bundle)",
+                fix: { ctx in
+                    try? FileManager.default.removeItem(at: ctx.derivedDataDir)
+                    try? FileManager.default.createDirectory(at: ctx.derivedDataDir, withIntermediateDirectories: true)
+                    ctx.appendLog("✓ Removed stale DerivedData at \(ctx.derivedDataDir.path) — archive will rebuild resource bundles on retry")
+                }
+            ),
+            HealRule(
                 id: "stale-archive",
                 trigger: .stageAndPattern(stage: PublishStep.exportIPA.rawValue, regex: "(unable to read archive|archive .* not found|No such file or directory.* xcarchive)"),
                 humanDescription: "Removing stale .xcarchive and re-archiving",
