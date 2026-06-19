@@ -69,22 +69,60 @@ struct SelfHealer {
                 }
             ),
             HealRule(
-                id: "archive-missing-resource-bundle",
-                // After the package graph changes (e.g. a checkout was just re-resolved
-                // by `spm-incomplete-checkout`), the per-run DerivedData — which is
-                // reused across publish runs — goes stale: the incremental build thinks
-                // SPM resource bundles are up-to-date while the files are actually gone,
-                // and archive dies with e.g.
-                // "lstat(.../Prod-iphoneos/nanopb_nanopb.bundle): No such file or directory".
-                // Cleaning DerivedData forces a fresh build that rebuilds the bundles. The
-                // shared SPM cache is only symlinked into DerivedData (recreated on the
-                // next archive), so wiping DerivedData never touches the resolved packages.
+                id: "archive-config-bundle-mismatch",
+                // SPM resource bundles are only ever built under the stock `Release`/`Debug`
+                // configuration *folder name*. A project that archives under a CUSTOM
+                // configuration (e.g. "Prod", "UAT") therefore fails: the package products
+                // land in `BuildProductsPath/Release-iphoneos/<pkg>.bundle`, while the app's
+                // Copy phase looks in `…/Prod-iphoneos/<pkg>.bundle` and aborts with
+                // `lstat(…/Prod-iphoneos/<pkg>.bundle): No such file or directory`. This is a
+                // folder-NAME mismatch, not a missing artifact — the bundle exists, just under
+                // the stock-config folder (confirmed Apple-forums issue; the "real" fix is to
+                // rename the configuration, which we can't do to a user's project). Bridge it:
+                // symlink every bundle from the sibling `*-iphoneos` build dir into the custom
+                // config dir, then let the INCREMENTAL retry's Copy phase resolve it. Wiping
+                // DerivedData cannot fix this — the rebuild re-creates the identical mismatch.
                 trigger: .stageAndPattern(stage: PublishStep.archive.rawValue, regex: #"lstat\([^)]*\.bundle\): No such file or directory"#),
-                humanDescription: "Cleaning stale DerivedData and re-archiving (missing resource bundle)",
+                humanDescription: "Bridging SPM resource bundles into the custom-configuration build dir",
                 fix: { ctx in
-                    try? FileManager.default.removeItem(at: ctx.derivedDataDir)
-                    try? FileManager.default.createDirectory(at: ctx.derivedDataDir, withIntermediateDirectories: true)
-                    ctx.appendLog("✓ Removed stale DerivedData at \(ctx.derivedDataDir.path) — archive will rebuild resource bundles on retry")
+                    // The log only needs to name ONE missing bundle — that pins the custom
+                    // config dir (…/Prod-iphoneos) and its parent (…/BuildProductsPath). We
+                    // then bridge EVERY bundle from the sibling config dirs, so a truncated
+                    // log snapshot can't leave some bundles unhealed.
+                    guard let firstMissing = SelfHealer.missingResourceBundlePaths(in: ctx.log).first else {
+                        ctx.appendLog("⚠︎ Could not parse a missing .bundle path from the log; skipping bundle bridge")
+                        return
+                    }
+                    let fm = FileManager.default
+                    let configDir = URL(fileURLWithPath: firstMissing).deletingLastPathComponent()   // …/Prod-iphoneos
+                    let buildProducts = configDir.deletingLastPathComponent()                          // …/BuildProductsPath
+                    let configName = configDir.lastPathComponent
+                    guard let siblings = try? fm.contentsOfDirectory(at: buildProducts, includingPropertiesForKeys: nil) else {
+                        ctx.appendLog("⚠︎ Could not read \(buildProducts.path); skipping bundle bridge")
+                        return
+                    }
+                    try? fm.createDirectory(at: configDir, withIntermediateDirectories: true)
+                    var linked = 0
+                    for sibling in siblings where sibling.lastPathComponent != configName && sibling.lastPathComponent.hasSuffix("-iphoneos") {
+                        let bundles = (try? fm.contentsOfDirectory(at: sibling, includingPropertiesForKeys: nil)) ?? []
+                        for source in bundles where source.pathExtension == "bundle" {
+                            let dest = configDir.appending(path: source.lastPathComponent)
+                            guard !fm.fileExists(atPath: dest.path) else { continue }
+                            try? fm.removeItem(at: dest) // clear any dangling link from a prior attempt
+                            do {
+                                try fm.createSymbolicLink(at: dest, withDestinationURL: source)
+                                linked += 1
+                                ctx.appendLog("✓ Bridged \(source.lastPathComponent) ← \(sibling.lastPathComponent)/")
+                            } catch {
+                                ctx.appendLog("⚠︎ Could not link \(source.lastPathComponent): \(error.localizedDescription)")
+                            }
+                        }
+                    }
+                    if linked == 0 {
+                        ctx.appendLog("⚠︎ No SPM resource bundles found in sibling build dirs to bridge into \(configName) — cannot self-heal this archive")
+                    } else {
+                        ctx.appendLog("✓ Bridged \(linked) resource bundle(s) into \(configName); the retry's Copy phase will resolve them")
+                    }
                 }
             ),
             HealRule(
@@ -140,6 +178,25 @@ struct SelfHealer {
             }
         }
         return names
+    }
+
+    /// Parses a build log for `lstat(<abs-path>.bundle): No such file or directory`
+    /// archive failures and returns the distinct absolute bundle paths the Copy phase
+    /// could not find — the symptom of the SPM-resource-bundle / custom-configuration
+    /// folder mismatch handled by the `archive-config-bundle-mismatch` rule. The path
+    /// may contain spaces (e.g. an app whose product name has a space), so we capture
+    /// everything up to the closing paren rather than splitting on whitespace.
+    static func missingResourceBundlePaths(in log: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"lstat\(([^)]*\.bundle)\): No such file or directory"#) else { return [] }
+        var paths: [String] = []
+        for line in log.split(separator: "\n") {
+            let s = String(line)
+            guard let match = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+                  let range = Range(match.range(at: 1), in: s) else { continue }
+            let path = String(s[range])
+            if !paths.contains(path) { paths.append(path) }
+        }
+        return paths
     }
 
     func attemptFix(stage: String, log: String, context: HealContext) async -> HealRule? {
