@@ -5,6 +5,15 @@
     <link>https://github.com/ersel95/FlightKit</link>
     <description>FlightKit updates</description>
     <item>
+      <title>FlightKit 1.0.13</title>
+      <pubDate>Fri, 19 Jun 2026 06:46:08 +0000</pubDate>
+      <sparkle:version>1.0.13</sparkle:version>
+      <sparkle:shortVersionString>1.0.13</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/ersel95/FlightKit/releases/tag/v1.0.13</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/ersel95/FlightKit/releases/download/v1.0.13/FlightKit-1.0.13.dmg" length="5737257" type="application/octet-stream" sparkle:edSignature="9Rm+IUyl2YZc/XBiGGE30zoXB7y9fnTZ0JV57i3P+cZYL30/EYa/Uosej2vQuy8pw7y9TtnzlxvLtCoZLr9TBQ==" />
+    </item>
+    <item>
       <title>FlightKit 1.0.12</title>
       <pubDate>Thu, 18 Jun 2026 09:59:41 +0000</pubDate>
       <sparkle:version>1.0.12</sparkle:version>
