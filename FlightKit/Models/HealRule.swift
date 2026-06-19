@@ -32,5 +32,11 @@ struct HealContext: Sendable {
     let derivedDataDir: URL
     let exportOptionsURL: URL
     let archiveURL: URL
+    /// Persistent shared SPM checkout cache (`<derivedData>/SourcePackages` is a
+    /// symlink to this). Heal rules use it to repair individual package checkouts.
+    let sharedSPMCacheDir: URL
+    /// The failing step's recent log, so a fix can parse it (e.g. to find which
+    /// package checkout is broken) instead of nuking unrelated state.
+    let log: String
     let appendLog: @Sendable (String) -> Void
 }

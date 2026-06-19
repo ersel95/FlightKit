@@ -41,6 +41,34 @@ struct SelfHealer {
                 }
             ),
             HealRule(
+                id: "spm-incomplete-checkout",
+                // A package checked out into the shared cache can be left incomplete
+                // (interrupted resolve, killed app, network drop) — clang then can't
+                // find a header that lives *inside* that same checkout, e.g.
+                // "'AppCheckCore/Sources/Core/APIService/GACAppCheckAPIService.h' file
+                // not found". The shared cache is never re-validated, so it stays broken
+                // forever. Repair surgically: delete only the offending checkout(s) and
+                // let the retry's archive re-resolve them — never wipe the whole cache.
+                trigger: .stageAndPattern(stage: PublishStep.archive.rawValue, regex: #"SourcePackages/checkouts/[^/]+/[^\n]*(file not found|No such file or directory)"#),
+                humanDescription: "Re-fetching incomplete Swift package checkout(s)",
+                fix: { ctx in
+                    let names = SelfHealer.corruptedCheckoutNames(in: ctx.log)
+                    guard !names.isEmpty else {
+                        // Couldn't pin the package from the log — bail rather than
+                        // nuke unrelated checkouts.
+                        ctx.appendLog("⚠︎ Could not identify the broken package from the log; skipping cache repair")
+                        return
+                    }
+                    let fm = FileManager.default
+                    let checkoutsDir = ctx.sharedSPMCacheDir.appending(path: "checkouts")
+                    for name in names {
+                        let dir = checkoutsDir.appending(path: name)
+                        try? fm.removeItem(at: dir)
+                        ctx.appendLog("✓ Removed incomplete checkout '\(name)' — xcodebuild will re-resolve it on retry")
+                    }
+                }
+            ),
+            HealRule(
                 id: "stale-archive",
                 trigger: .stageAndPattern(stage: PublishStep.exportIPA.rawValue, regex: "(unable to read archive|archive .* not found|No such file or directory.* xcarchive)"),
                 humanDescription: "Removing stale .xcarchive and re-archiving",
@@ -74,6 +102,25 @@ struct SelfHealer {
                 }
             ),
         ]
+    }
+
+    /// Parses a build log for SPM checkout paths that reported a missing file, and
+    /// returns the distinct package directory names (the `<name>` in
+    /// `SourcePackages/checkouts/<name>/…`). The compiler prints the broken source's
+    /// absolute path — which includes the checkout dir — on the same line as the
+    /// "file not found" / "No such file" diagnostic, so we scan line by line.
+    static func corruptedCheckoutNames(in log: String) -> [String] {
+        var names: [String] = []
+        for line in log.split(separator: "\n") {
+            guard line.contains("file not found") || line.contains("No such file") else { continue }
+            guard let range = line.range(of: #"checkouts/[^/]+/"#, options: .regularExpression) else { continue }
+            // range covers "checkouts/<name>/" — strip the fixed prefix and trailing slash.
+            let name = line[range].dropFirst("checkouts/".count).dropLast()
+            if !name.isEmpty, !names.contains(String(name)) {
+                names.append(String(name))
+            }
+        }
+        return names
     }
 
     func attemptFix(stage: String, log: String, context: HealContext) async -> HealRule? {

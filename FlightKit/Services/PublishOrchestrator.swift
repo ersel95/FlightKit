@@ -91,6 +91,8 @@ final class PublishOrchestrator {
                     derivedDataDir: derivedDataDir,
                     exportOptionsURL: exportOptionsURL,
                     archiveURL: archiveURL,
+                    sharedSPMCacheDir: sharedSPMCacheDir,
+                    log: logSnapshot,
                     appendLog: { [state] msg in
                         Task { @MainActor in state.appendLog(msg, kind: .fix) }
                     }
