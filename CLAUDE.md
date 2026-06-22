@@ -37,7 +37,8 @@ FlightKit/
 ├── Services/                   ProjectStore (App Support catalog), ProjectInspector,
 │                               KeychainStore, JWTGenerator, ASCAPIClient,
 │                               XcconfigEditor, XcodebuildRunner, ExportOptionsBuilder,
-│                               AltoolUploader, SelfHealer, PublishOrchestrator
+│                               AltoolUploader, SelfHealer, PublishOrchestrator,
+│                               TeamsNotifier
 ├── Views/                      ContentView, ProjectListView, ProjectEditorView,
 │                               ProjectDetailView, CredentialsEditor, PipelineView
 ├── Resources/Assets.xcassets
@@ -88,6 +89,16 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   independent processing watch.
 - **Report**: `PipelineReportView` shows submitted vs ASC-recorded version,
   flagging a store renumber.
+- **Teams notification** (optional, per `AppProject`): when set, the batch posts a
+  single summary of the successfully-uploaded envs to a Teams chat once all blocking
+  uploads finish (`ProjectDetailView.notifyTeamsIfNeeded` — one message per batch, not
+  per env). For orgs that have locked down Incoming Webhooks **and** the Power Automate
+  portal there is no server-side path, so `TeamsNotifier` drives the **local Teams
+  desktop app**: clipboard → open `https://teams.microsoft.com/l/chat/…` deep link
+  (focuses the compose box) → synthesize `⌘V` + `Return` via `CGEvent` → restore the
+  clipboard. `teamsChatLink`/`teamsNotifyEnabled` are optional on `AppProject` (old
+  `projects.json` decodes unchanged); the link lives only in the local catalog, never
+  committed. See `docs/teams-notifications.md`.
 - **Auto-update (Sparkle)**: `UpdaterController` owns `SPUStandardUpdaterController`
   (`UpdaterView.swift`); a "Güncellemeleri Denetle…" menu item sits under the app
   menu. `Info.plist` carries `SUFeedURL` (the appcast on raw `main`), `SUPublicEDKey`,
@@ -122,6 +133,15 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
 - **Sparkle bootstrap**: a build without Sparkle can't auto-update — users on such a
   build must update once manually to a Sparkle-enabled release; auto-update works from
   there. The `appcast.xml` URL 404s until the first Sparkle release populates it.
+- **Teams notify needs Accessibility, not a webhook.** `TeamsNotifier` posts
+  synthetic keystrokes (`CGEvent`), which require the app to be **trusted for
+  Accessibility** (System Settings → Privacy & Security → Accessibility). This works
+  because the app is **unsandboxed** (`app-sandbox = false` in `FlightKit.entitlements`)
+  — don't enable the sandbox or this breaks. The permission resets per rebuild for a
+  dev build but is stable for the notarized release. Use the literal key string
+  `"AXTrustedCheckOptionPrompt"` (the `kAX…` global var isn't concurrency-safe under
+  Swift 6). The `&message=` deep-link param does **not** prefill for `…@thread.v2`
+  chat links — that's why we paste instead of putting the text in the URL.
 - `ProjectStore.init` is a normal (`@MainActor`) init; do **not** make it
   `nonisolated` — a nonisolated init can't assign the `@MainActor` `projects`.
   `FlightKitApp` being `@MainActor` is what lets `@State = ProjectStore()` build.

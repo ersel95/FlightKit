@@ -22,6 +22,10 @@ pipeline and a clear, copyable log.
 - **Publish report** — what you submitted vs what App Store Connect actually
   recorded, flagged if the store renumbered the build.
 - **Native log console** — full text selection, ⌘F, follow‑tail toggle.
+- **Teams notification** (optional, per app) — when a batch finishes, post the
+  released version into a Microsoft Teams chat automatically. Works even when your
+  org has locked down webhooks and Power Automate (it drives the local Teams app).
+  See [docs/teams-notifications.md](docs/teams-notifications.md).
 - Your apps and API keys stay on your machine (catalog in Application Support,
   keys in the Keychain).
 
@@ -59,6 +63,10 @@ brew install --cask flightkit
 3. **Choose destination** (TestFlight / App Store) and **environment** (or All).
 4. Set the marketing version and build number (**Suggest next** picks a safe one)
    and **Upload**.
+5. *(Optional)* In the app editor's **Teams** section, turn on notifications and
+   paste a Teams chat link to get an automatic "released" message after each batch.
+   First use asks for Accessibility permission — see
+   [docs/teams-notifications.md](docs/teams-notifications.md).
 
 ### Requirements
 
