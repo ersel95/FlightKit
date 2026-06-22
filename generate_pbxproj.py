@@ -40,6 +40,7 @@ SOURCES = [
     ("Services/AltoolUploader.swift", "Services"),
     ("Services/SelfHealer.swift", "Services"),
     ("Services/PublishOrchestrator.swift", "Services"),
+    ("Services/TeamsNotifier.swift", "Services"),
     ("Services/ProjectStore.swift", "Services"),
     ("Services/ProjectInspector.swift", "Services"),
     ("Services/GitChangeInspector.swift", "Services"),

@@ -28,6 +28,9 @@ struct ProjectEditorView: View {
     @State private var schemeName: String
     @State private var teamId: String
     @State private var environments: [AppEnvironment]
+    @State private var teamsNotifyEnabled: Bool
+    @State private var teamsChatLink: String
+    @State private var teamsTestResult: String?
     @State private var availableSchemes: [String] = []
     @State private var scanWarning: String?
     @State private var scanDiagnostics: String = ""
@@ -44,6 +47,8 @@ struct ProjectEditorView: View {
         _teamId = State(initialValue: existing?.teamId ?? "")
         _environments = State(initialValue: existing?.environments
             ?? [AppEnvironment(name: "Prod", configuration: "Release", bundleIdentifier: "")])
+        _teamsNotifyEnabled = State(initialValue: existing?.teamsNotifyEnabled ?? false)
+        _teamsChatLink = State(initialValue: existing?.teamsChatLink ?? "")
     }
 
     var body: some View {
@@ -182,6 +187,7 @@ struct ProjectEditorView: View {
                     Text("Each environment is one build configuration + the bundle id it ships under. Add missing ones, fix wrong values, swipe to delete extras.")
                         .font(.caption2)
                 }
+                teamsSection
             }
             .formStyle(.grouped)
             if let error {
@@ -210,6 +216,49 @@ struct ProjectEditorView: View {
                 .font(.callout.monospaced())
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var teamsSection: some View {
+        Section {
+            Toggle("Yayın sonrası Teams bildirimi", isOn: $teamsNotifyEnabled)
+            if teamsNotifyEnabled {
+                TextField("Teams sohbet bağlantısı", text: $teamsChatLink, prompt: Text("https://teams.microsoft.com/l/chat/…"))
+                    .font(.callout.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack {
+                    Button("Test mesajı gönder") { testTeams() }
+                        .controlSize(.small)
+                        .disabled(teamsChatLink.trimmed.isEmpty)
+                    if let teamsTestResult {
+                        Text(teamsTestResult).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Teams")
+        } footer: {
+            Text("Bir batch'in tüm yüklemeleri bitince, yayınlanan sürümü bu sohbete otomatik gönderir. Teams masaüstü uygulamasını sürüklediği için FlightKit'e bir kez **Erişilebilirlik** izni vermeniz gerekir (System Settings → Privacy & Security → Accessibility).")
+                .font(.caption2)
+        }
+    }
+
+    /// Fires a one-off test notification so the user can confirm the link, the
+    /// Accessibility permission and the paste-and-send flow without a full publish.
+    private func testTeams() {
+        teamsTestResult = "Gönderiliyor…"
+        Task { @MainActor in
+            do {
+                try await TeamsNotifier.notify(
+                    chatLink: teamsChatLink,
+                    message: "✅ FlightKit test bildirimi — \(displayName.trimmed.isEmpty ? "FlightKit" : displayName.trimmed)"
+                )
+                teamsTestResult = "Gönderildi"
+            } catch {
+                teamsTestResult = error.localizedDescription
+            }
+        }
     }
 
     private var isValid: Bool {
@@ -289,6 +338,8 @@ struct ProjectEditorView: View {
         project.schemeName = schemeName.trimmed
         project.teamId = teamId.trimmed
         project.environments = cleaned
+        project.teamsNotifyEnabled = teamsNotifyEnabled
+        project.teamsChatLink = teamsChatLink.trimmed.isEmpty ? nil : teamsChatLink.trimmed
         // Effective defaults used by the pipeline before an environment is applied.
         project.configuration = first.configuration
         project.bundleIdentifier = first.bundleIdentifier

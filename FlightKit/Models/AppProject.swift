@@ -35,6 +35,20 @@ struct AppProject: Identifiable, Codable, Hashable {
     var bundleIdentifier: String
     var teamId: String
     var environments: [AppEnvironment]?
+    /// Optional Microsoft Teams deep link (`https://teams.microsoft.com/l/chat/…`)
+    /// of the chat/channel to notify once a publish finishes. Stored locally only
+    /// (App Support catalog) — it grants the ability to post into that chat, so it
+    /// is treated like a secret and never committed. Optional so existing catalogs
+    /// decode unchanged.
+    var teamsChatLink: String?
+    /// Whether to post a release notification to `teamsChatLink` after a successful
+    /// batch. Optional (defaults to off) so old projects.json decodes unchanged.
+    var teamsNotifyEnabled: Bool?
+
+    /// True only when notifications are switched on *and* a link is present.
+    var teamsNotificationsActive: Bool {
+        teamsNotifyEnabled == true && !(teamsChatLink?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
 
     var containerURL: URL { URL(fileURLWithPath: containerPath) }
 

@@ -681,6 +681,29 @@ struct ProjectDetailView: View {
                 batch.trackProcessingWatch(Task { @MainActor in await watcher.runProcessingWatch() })
             }
             batch.isFinished = true
+            await notifyTeamsIfNeeded(envs: envs, states: batch.states)
+        }
+    }
+
+    /// Posts a single Teams summary for the environments that uploaded successfully
+    /// (once per batch, not per env, so it steals focus only once). Best-effort: a
+    /// bad link or missing Accessibility permission only logs into the active state.
+    private func notifyTeamsIfNeeded(envs: [AppEnvironment], states: [PipelineState]) async {
+        guard project.teamsNotificationsActive, let link = project.teamsChatLink else { return }
+        let uploaded = zip(envs, states).filter { $0.1.uploadedAt != nil }
+        guard !uploaded.isEmpty else { return }
+
+        var lines = ["🚀 \(project.displayName) sürümü yayınlandı"]
+        for (env, state) in uploaded {
+            lines.append("• \(env.name) → \(state.destination.displayName) · \(state.targetVersion) (\(state.targetBuildNumber))")
+        }
+        let message = lines.joined(separator: "\n")
+
+        let log = { (msg: String) -> Void in states.first?.appendLog(msg, kind: .info) }
+        do {
+            try await TeamsNotifier.notify(chatLink: link, message: message, log: log)
+        } catch {
+            log("⚠︎ Teams bildirimi gönderilemedi: \(error.localizedDescription)")
         }
     }
 }
