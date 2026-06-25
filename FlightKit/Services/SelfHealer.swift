@@ -69,60 +69,37 @@ struct SelfHealer {
                 }
             ),
             HealRule(
-                id: "archive-config-bundle-mismatch",
-                // SPM resource bundles are only ever built under the stock `Release`/`Debug`
-                // configuration *folder name*. A project that archives under a CUSTOM
-                // configuration (e.g. "Prod", "UAT") therefore fails: the package products
-                // land in `BuildProductsPath/Release-iphoneos/<pkg>.bundle`, while the app's
-                // Copy phase looks in `…/Prod-iphoneos/<pkg>.bundle` and aborts with
-                // `lstat(…/Prod-iphoneos/<pkg>.bundle): No such file or directory`. This is a
-                // folder-NAME mismatch, not a missing artifact — the bundle exists, just under
-                // the stock-config folder (confirmed Apple-forums issue; the "real" fix is to
-                // rename the configuration, which we can't do to a user's project). Bridge it:
-                // symlink every bundle from the sibling `*-iphoneos` build dir into the custom
-                // config dir, then let the INCREMENTAL retry's Copy phase resolve it. Wiping
-                // DerivedData cannot fix this — the rebuild re-creates the identical mismatch.
-                trigger: .stageAndPattern(stage: PublishStep.archive.rawValue, regex: #"lstat\([^)]*\.bundle\): No such file or directory"#),
-                humanDescription: "Bridging SPM resource bundles into the custom-configuration build dir",
+                id: "spm-missing-binary-artifact",
+                // A binary (xcframework) SPM target's artifact can be left INCOMPLETE in the
+                // shared cache — an interrupted/partial extraction drops the real `.xcframework`
+                // (e.g. only `SealObjc.xcframework` lands, not `Seal.xcframework`; or the dir holds
+                // just a LICENSE) while `workspace-state.json` still records the package as
+                // resolved. SPM trusts that recorded state and never re-validates the files on
+                // disk, so the archive fails *forever* with "There is no XCFramework found at
+                // …/SourcePackages/artifacts/<pkg>/<name>/<name>.xcframework". Wiping DerivedData
+                // cannot fix it — the artifacts live in the symlinked shared cache, untouched.
+                // Repair surgically: delete the broken artifact dir(s) AND drop their entries from
+                // workspace-state, so the retry's resolve re-extracts them (the zip is already in
+                // SPM's global download cache, so this is fast and needs no network).
+                trigger: .stageAndPattern(stage: PublishStep.archive.rawValue, regex: #"There is no XCFramework found at '[^']*/SourcePackages/artifacts/"#),
+                humanDescription: "Re-extracting incomplete Swift binary artifact(s) (xcframework)",
                 fix: { ctx in
-                    // The log only needs to name ONE missing bundle — that pins the custom
-                    // config dir (…/Prod-iphoneos) and its parent (…/BuildProductsPath). We
-                    // then bridge EVERY bundle from the sibling config dirs, so a truncated
-                    // log snapshot can't leave some bundles unhealed.
-                    guard let firstMissing = SelfHealer.missingResourceBundlePaths(in: ctx.log).first else {
-                        ctx.appendLog("⚠︎ Could not parse a missing .bundle path from the log; skipping bundle bridge")
+                    let names = SelfHealer.missingArtifactPackageNames(in: ctx.log)
+                    guard !names.isEmpty else {
+                        ctx.appendLog("⚠︎ Could not identify the broken binary artifact from the log; skipping cache repair")
                         return
                     }
                     let fm = FileManager.default
-                    let configDir = URL(fileURLWithPath: firstMissing).deletingLastPathComponent()   // …/Prod-iphoneos
-                    let buildProducts = configDir.deletingLastPathComponent()                          // …/BuildProductsPath
-                    let configName = configDir.lastPathComponent
-                    guard let siblings = try? fm.contentsOfDirectory(at: buildProducts, includingPropertiesForKeys: nil) else {
-                        ctx.appendLog("⚠︎ Could not read \(buildProducts.path); skipping bundle bridge")
-                        return
+                    let artifactsDir = ctx.sharedSPMCacheDir.appending(path: "artifacts")
+                    for name in names {
+                        try? fm.removeItem(at: artifactsDir.appending(path: name))
+                        // Also clear the matching extraction-staging dir so a leftover partial
+                        // extract can't shadow the fresh one.
+                        try? fm.removeItem(at: artifactsDir.appending(path: "extract").appending(path: name))
+                        ctx.appendLog("✓ Removed incomplete artifact '\(name)'")
                     }
-                    try? fm.createDirectory(at: configDir, withIntermediateDirectories: true)
-                    var linked = 0
-                    for sibling in siblings where sibling.lastPathComponent != configName && sibling.lastPathComponent.hasSuffix("-iphoneos") {
-                        let bundles = (try? fm.contentsOfDirectory(at: sibling, includingPropertiesForKeys: nil)) ?? []
-                        for source in bundles where source.pathExtension == "bundle" {
-                            let dest = configDir.appending(path: source.lastPathComponent)
-                            guard !fm.fileExists(atPath: dest.path) else { continue }
-                            try? fm.removeItem(at: dest) // clear any dangling link from a prior attempt
-                            do {
-                                try fm.createSymbolicLink(at: dest, withDestinationURL: source)
-                                linked += 1
-                                ctx.appendLog("✓ Bridged \(source.lastPathComponent) ← \(sibling.lastPathComponent)/")
-                            } catch {
-                                ctx.appendLog("⚠︎ Could not link \(source.lastPathComponent): \(error.localizedDescription)")
-                            }
-                        }
-                    }
-                    if linked == 0 {
-                        ctx.appendLog("⚠︎ No SPM resource bundles found in sibling build dirs to bridge into \(configName) — cannot self-heal this archive")
-                    } else {
-                        ctx.appendLog("✓ Bridged \(linked) resource bundle(s) into \(configName); the retry's Copy phase will resolve them")
-                    }
+                    SelfHealer.dropArtifactsFromWorkspaceState(named: names, in: ctx.sharedSPMCacheDir, appendLog: ctx.appendLog)
+                    ctx.appendLog("✓ xcodebuild will re-extract the artifact(s) on retry")
                 }
             ),
             HealRule(
@@ -180,23 +157,52 @@ struct SelfHealer {
         return names
     }
 
-    /// Parses a build log for `lstat(<abs-path>.bundle): No such file or directory`
-    /// archive failures and returns the distinct absolute bundle paths the Copy phase
-    /// could not find — the symptom of the SPM-resource-bundle / custom-configuration
-    /// folder mismatch handled by the `archive-config-bundle-mismatch` rule. The path
-    /// may contain spaces (e.g. an app whose product name has a space), so we capture
-    /// everything up to the closing paren rather than splitting on whitespace.
-    static func missingResourceBundlePaths(in log: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: #"lstat\(([^)]*\.bundle)\): No such file or directory"#) else { return [] }
-        var paths: [String] = []
+    /// Parses a build log for `There is no XCFramework found at
+    /// '<…>/SourcePackages/artifacts/<pkg>/<name>/<name>.xcframework'` archive failures and
+    /// returns the distinct package-identity dir names (`<pkg>`). A binary artifact extracted
+    /// incompletely into the shared cache leaves the package recorded as resolved in
+    /// workspace-state but missing its `.xcframework` on disk; this pins which artifact dir(s)
+    /// to purge so the retry re-extracts them.
+    static func missingArtifactPackageNames(in log: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"SourcePackages/artifacts/([^/]+)/"#) else { return [] }
+        var names: [String] = []
         for line in log.split(separator: "\n") {
+            guard line.contains("There is no XCFramework found at") else { continue }
             let s = String(line)
             guard let match = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
                   let range = Range(match.range(at: 1), in: s) else { continue }
-            let path = String(s[range])
-            if !paths.contains(path) { paths.append(path) }
+            let name = String(s[range])
+            // `extract` is the staging dir, not a package — never treat it as one.
+            if !name.isEmpty, name != "extract", !names.contains(name) { names.append(name) }
         }
-        return paths
+        return names
+    }
+
+    /// Removes the named packages' binary-artifact entries from the shared cache's
+    /// `workspace-state.json`. SPM records resolved binary artifacts there and will NOT
+    /// re-validate their on-disk presence — so an incomplete extraction stays broken until the
+    /// stale entry is dropped, after which the next resolve re-fetches/extracts it. Best-effort:
+    /// a malformed/absent state file just means the retry re-resolves more than strictly needed.
+    static func dropArtifactsFromWorkspaceState(named names: [String], in sharedSPMCacheDir: URL, appendLog: (String) -> Void) {
+        let stateURL = sharedSPMCacheDir.appending(path: "workspace-state.json")
+        guard let data = try? Data(contentsOf: stateURL),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var object = root["object"] as? [String: Any],
+              let artifacts = object["artifacts"] as? [[String: Any]] else {
+            appendLog("⚠︎ Could not read workspace-state.json; retry will re-resolve from scratch instead")
+            return
+        }
+        let wanted = Set(names)
+        let kept = artifacts.filter { entry in
+            let identity = (entry["packageRef"] as? [String: Any])?["identity"] as? String
+            return identity.map { !wanted.contains($0) } ?? true
+        }
+        guard kept.count != artifacts.count else { return }
+        object["artifacts"] = kept
+        root["object"] = object
+        guard let out = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? out.write(to: stateURL)
+        appendLog("✓ Dropped \(artifacts.count - kept.count) stale artifact entr\(artifacts.count - kept.count == 1 ? "y" : "ies") from workspace-state.json")
     }
 
     func attemptFix(stage: String, log: String, context: HealContext) async -> HealRule? {
