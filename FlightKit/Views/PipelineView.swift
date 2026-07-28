@@ -68,6 +68,10 @@ struct PipelineView: View {
                 Text("Publishing \(state.project.displayName)").font(.title3.weight(.semibold))
                 Text("\(state.targetVersion) (\(state.targetBuildNumber)) · \(state.project.bundleIdentifier)")
                     .font(.caption).foregroundStyle(.secondary)
+                if let branch = state.targetBranch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Button {
@@ -479,6 +483,10 @@ struct PipelineReportView: View {
     @ViewBuilder
     private func rows(for state: PipelineState) -> some View {
         LabeledContent("Gönderilen", value: "\(state.targetVersion) (\(state.targetBuildNumber))")
+
+        if let branch = state.targetBranch {
+            LabeledContent("Branch", value: branch)
+        }
 
         LabeledContent("App Store Connect") {
             if let build = state.publishedBuildNumber {

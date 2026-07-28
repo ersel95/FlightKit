@@ -56,6 +56,16 @@ struct ProjectDetailView: View {
     /// The beta group ids the user has ticked per environment (by env name).
     /// Remembered per project across launches.
     @State private var selectedBetaGroupIds: [String: Set<String>] = [:]
+    /// Whether the project's folder is a git repository — gates the branch picker.
+    @State private var isGitRepo = false
+    /// Branches available in that repository (local + already-fetched remotes).
+    @State private var repoBranches: [GitBranch] = []
+    /// The branch currently checked out, shown as the "leave as is" default.
+    @State private var currentGitBranch: String?
+    @State private var isLoadingBranches = false
+    /// Branch picked per environment (by env name); "" / missing = don't switch.
+    /// Remembered per project across launches, e.g. Test → `tst`, Prod → `liv`.
+    @State private var selectedBranches: [String: String] = [:]
 
     /// Environments this run will publish to, in declaration order. A project
     /// with a single environment always publishes it (no picker shown); a
@@ -94,6 +104,7 @@ struct ProjectDetailView: View {
             // Restore this project's remembered environment + destination picks,
             // pruned to environments that still exist.
             restoreSelection()
+            await loadBranches()
             await reload()
         }
         .onChange(of: selectedEnvNames) {
@@ -138,6 +149,7 @@ struct ProjectDetailView: View {
     private var envSelectionDefaultsKey: String { "FlightKit.envSelection.\(project.id)" }
     private var destinationDefaultsKey: String { "FlightKit.destination.\(project.id)" }
     private func betaGroupsDefaultsKey(env: String) -> String { "FlightKit.betaGroups.\(project.id).\(env)" }
+    private func branchDefaultsKey(env: String) -> String { "FlightKit.branch.\(project.id).\(env)" }
 
     /// Loads the remembered environment subset + destination for this project,
     /// dropping any environment names that no longer exist. Falls back to the
@@ -164,6 +176,16 @@ struct ProjectDetailView: View {
             restoredGroups[env.name] = Set(saved)
         }
         selectedBetaGroupIds = restoredGroups
+
+        // Branch picks are remembered per environment too (Test ← tst, Prod ← liv …);
+        // pruned to branches that still exist once `loadBranches` returns.
+        var restoredBranches: [String: String] = [:]
+        for env in project.resolvedEnvironments {
+            if let saved = UserDefaults.standard.string(forKey: branchDefaultsKey(env: env.name)), !saved.isEmpty {
+                restoredBranches[env.name] = saved
+            }
+        }
+        selectedBranches = restoredBranches
     }
 
     private func persistSelection() {
@@ -173,6 +195,10 @@ struct ProjectDetailView: View {
 
     private func persistBetaGroupSelection(env: String) {
         UserDefaults.standard.set(Array(selectedBetaGroupIds[env] ?? []), forKey: betaGroupsDefaultsKey(env: env))
+    }
+
+    private func persistBranchSelection(env: String) {
+        UserDefaults.standard.set(selectedBranches[env] ?? "", forKey: branchDefaultsKey(env: env))
     }
 
     private var header: some View {
@@ -265,6 +291,7 @@ struct ProjectDetailView: View {
                     }
                 }
             }
+            branchInputs
             HStack(alignment: .bottom, spacing: 16) {
                 VStack(alignment: .leading) {
                     Text("Marketing version").font(.caption).foregroundStyle(.secondary)
@@ -329,6 +356,103 @@ struct ProjectDetailView: View {
             selectedEnvNames.remove(env.name)
         } else {
             selectedEnvNames.insert(env.name)
+        }
+    }
+
+    // MARK: - Git branch input
+
+    /// Per-environment branch picker: which branch each environment is built from
+    /// (e.g. Test ← `tst`, UAT ← `uat`, Prod ← `liv`). Only shown for a project that
+    /// lives in a git repository. Leaving an environment on "değiştirme" keeps the
+    /// old behaviour — the working copy is archived exactly as it currently is.
+    @ViewBuilder
+    private var branchInputs: some View {
+        if isGitRepo {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Git branch (opsiyonel)").font(.caption).foregroundStyle(.secondary)
+                    if isLoadingBranches {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button { Task { await loadBranches() } } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Branch listesini yenile (uzak branch'ler için önce fetch/pull yapın)")
+                    }
+                }
+                ForEach(targetEnvironments) { env in
+                    HStack(spacing: 8) {
+                        Text(env.name)
+                            .font(.callout)
+                            .frame(width: 72, alignment: .leading)
+                        Picker("", selection: branchBinding(env)) {
+                            Text(currentGitBranch.map { "Mevcut branch — \($0)" } ?? "Mevcut branch")
+                                .tag("")
+                            Divider()
+                            ForEach(repoBranches) { branch in
+                                Text(branch.isLocal ? branch.name : "\(branch.name) · uzak")
+                                    .tag(branch.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 280, alignment: .leading)
+                    }
+                }
+                Text("Seçilen branch, o ortamın arşivi alınmadan hemen önce `git checkout` ile aktif edilir. Depo bu branch'te bırakılır; kaydedilmemiş değişiklikleriniz geçişi engellerse adım hata verir.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .frame(maxWidth: 420, alignment: .leading)
+            }
+        }
+    }
+
+    private func branchBinding(_ env: AppEnvironment) -> Binding<String> {
+        Binding(
+            get: { selectedBranches[env.name] ?? "" },
+            set: { newValue in
+                if newValue.isEmpty {
+                    selectedBranches.removeValue(forKey: env.name)
+                } else {
+                    selectedBranches[env.name] = newValue
+                }
+                persistBranchSelection(env: env.name)
+            }
+        )
+    }
+
+    /// The branch this environment will be checked out to, or `nil` to build the
+    /// working copy as-is.
+    private func effectiveBranch(for env: AppEnvironment) -> String? {
+        guard isGitRepo else { return nil }
+        let name = selectedBranches[env.name] ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    /// Reads the repository's branches and current HEAD. Failure (not a repo, no
+    /// git) simply hides the picker — a project that isn't in a repository keeps
+    /// publishing exactly as before.
+    private func loadBranches() async {
+        isLoadingBranches = true
+        defer { isLoadingBranches = false }
+        let repo = project.workspaceRoot
+        guard await GitBranchInspector.isRepository(repo) else {
+            isGitRepo = false
+            repoBranches = []
+            currentGitBranch = nil
+            return
+        }
+        isGitRepo = true
+        currentGitBranch = await GitBranchInspector.currentBranch(repoDir: repo)
+        let branches = (try? await GitBranchInspector.branches(repoDir: repo)) ?? []
+        repoBranches = branches
+        // Drop remembered picks for branches that no longer exist, so a deleted
+        // branch never lingers and fails the checkout at archive time.
+        if !branches.isEmpty {
+            let existing = Set(branches.map(\.name))
+            for (envName, branch) in selectedBranches where !existing.contains(branch) {
+                selectedBranches.removeValue(forKey: envName)
+                persistBranchSelection(env: envName)
+            }
         }
     }
 
@@ -661,7 +785,7 @@ struct ProjectDetailView: View {
         let envs = targetEnvironments
         guard !envs.isEmpty else { return }
         let states = envs.map {
-            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0), testNote: effectiveTestNote(for: $0), betaGroups: effectiveBetaGroups(for: $0))
+            PipelineState(project: project.applying($0), destination: destination, version: marketingVersion, buildNumber: effectiveBuildNumber(for: $0), testNote: effectiveTestNote(for: $0), betaGroups: effectiveBetaGroups(for: $0), branch: effectiveBranch(for: $0))
         }
         let batch = PipelineBatch(states: states)
         pipelineBatch = batch
@@ -695,7 +819,8 @@ struct ProjectDetailView: View {
 
         var lines = ["🚀 \(project.displayName) sürümü yayınlandı"]
         for (env, state) in uploaded {
-            lines.append("• \(env.name) → \(state.destination.displayName) · \(state.targetVersion) (\(state.targetBuildNumber))")
+            let branch = state.targetBranch.map { " · \($0)" } ?? ""
+            lines.append("• \(env.name) → \(state.destination.displayName) · \(state.targetVersion) (\(state.targetBuildNumber))\(branch)")
         }
         let message = lines.joined(separator: "\n")
 

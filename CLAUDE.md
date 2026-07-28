@@ -80,6 +80,17 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   their one env). The picked subset **and** destination are remembered per project
   across launches in `UserDefaults` (`FlightKit.envSelection.<id>` /
   `FlightKit.destination.<id>`), restored in `ProjectDetailView.restoreSelection`.
+- **Git branch per environment** (optional): `GitBranchInspector` lists the repo's
+  branches (local + already-fetched remotes, deduped on the short name) and the
+  publish screen shows one picker per target env — e.g. Test ← `tst`, UAT ← `uat`,
+  Prod ← `liv`. A pick is remembered per project+env in `UserDefaults`
+  (`FlightKit.branch.<id>.<env>`) and pruned when the branch disappears. Picking a
+  branch prepends a `checkoutBranch` step (`PublishStep.steps(for:branchSelected:)`)
+  that runs **before** validate, so the version write and archive read the right
+  sources; the repo is left on that branch (a batch's next env checks out its own).
+  Nothing is stashed or forced: a dirty tree is only *warned* about, and a checkout
+  git refuses fails the step with git's own message. Not picking = old behaviour
+  (build the working copy as-is, no checkout step listed).
 - **App Store destination** = TestFlight upload **plus** auto-attaching the
   processed build to an App Store version (created if missing) once processing
   reaches VALID — done in the background watch, so it only completes if the screen

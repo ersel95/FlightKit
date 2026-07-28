@@ -21,6 +21,10 @@ final class PipelineState {
     /// assigned automatically in `runProcessingWatch` once the build is VALID.
     /// Empty means no automatic assignment.
     let betaGroups: [ASCBetaGroup]
+    /// The git branch this environment must be built from. `nil` means "build the
+    /// working copy as it is" — no checkout happens and the checkout step is not
+    /// even listed. Set per environment at launch (e.g. Test ← `tst`, Prod ← `liv`).
+    let targetBranch: String?
     /// Names of the beta groups the build was actually assigned to (filled in after
     /// processing) — surfaced in the report.
     var assignedBetaGroupNames: [String] = []
@@ -53,17 +57,18 @@ final class PipelineState {
 
     /// The ordered steps for this run — depends on the destination (App Store
     /// adds the attach step).
-    var steps: [PublishStep] { PublishStep.steps(for: destination) }
+    var steps: [PublishStep] { PublishStep.steps(for: destination, branchSelected: targetBranch != nil) }
 
-    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String, testNote: String? = nil, betaGroups: [ASCBetaGroup] = []) {
+    init(project: AppProject, destination: DistributionTarget, version: String, buildNumber: String, testNote: String? = nil, betaGroups: [ASCBetaGroup] = [], branch: String? = nil) {
         self.project = project
         self.destination = destination
         self.targetVersion = version
         self.targetBuildNumber = buildNumber
         self.testNote = testNote
         self.betaGroups = betaGroups
+        self.targetBranch = branch
         var initial: [PublishStep: PublishStepStatus] = [:]
-        for step in PublishStep.steps(for: destination) {
+        for step in PublishStep.steps(for: destination, branchSelected: branch != nil) {
             initial[step] = .pending
         }
         self.stepStatuses = initial

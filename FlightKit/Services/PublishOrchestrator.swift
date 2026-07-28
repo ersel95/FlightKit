@@ -56,6 +56,11 @@ final class PublishOrchestrator {
     func run() async {
         do {
             try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+            // Pin the working copy to this environment's branch *first*, so every
+            // later step (version write, archive) reads the right sources.
+            if state.targetBranch != nil {
+                try await execute(.checkoutBranch, body: { try await self.checkoutBranch() })
+            }
             try await execute(.validate, body: { try await self.validate() })
             try await execute(.writeXcconfig, body: { try await self.writeXcconfig() })
             try await execute(.generateExportOptions, body: { try await self.writeExportOptions() })
@@ -118,6 +123,30 @@ final class PublishOrchestrator {
     }
 
     // MARK: - Steps
+
+    /// Checks out the branch picked for this environment (e.g. `tst` / `uat` / `liv`)
+    /// in the project's repository. Only runs when a branch was picked; the repo is
+    /// left on that branch afterwards (a batch's next environment checks out its own),
+    /// so what was built stays inspectable. A checkout git refuses — typically local
+    /// modifications that would be overwritten — fails the step with git's own message.
+    private func checkoutBranch() async throws {
+        guard let branch = state.targetBranch else { return }
+        let outcome = try await GitBranchInspector.checkout(branch, repoDir: workspaceRoot)
+        if let previous = outcome.previousBranch, previous != branch {
+            state.appendLog("Branch: \(previous) → \(branch)", kind: .info)
+        } else {
+            state.appendLog("Branch: \(branch)", kind: .info)
+        }
+        if !outcome.headDescription.isEmpty {
+            state.appendLog("HEAD: \(outcome.headDescription)", kind: .info)
+        }
+        if !outcome.dirtyPaths.isEmpty {
+            state.appendLog("⚠︎ Çalışma kopyasında kaydedilmemiş değişiklikler var — build tam olarak '\(branch)' branch'i değil:", kind: .fix)
+            for path in outcome.dirtyPaths {
+                state.appendLog("   \(path)", kind: .fix)
+            }
+        }
+    }
 
     private func validate() async throws {
         // Fail fast with an actionable message when this Mac has no usable full Xcode

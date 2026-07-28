@@ -8,6 +8,7 @@
 import Foundation
 
 enum PublishStep: String, CaseIterable, Identifiable, Hashable {
+    case checkoutBranch = "Checkout branch"
     case validate = "Validate"
     case writeXcconfig = "Write version to xcconfig"
     case generateExportOptions = "Generate exportOptions.plist"
@@ -26,8 +27,11 @@ enum PublishStep: String, CaseIterable, Identifiable, Hashable {
     /// attach — runs as a non-blocking background watch so environments in an "All"
     /// sweep never wait on each other's processing. `waitProcessing`/`attachVersion`
     /// therefore no longer appear as pipeline steps (see `ProcessingPhase`).
-    static func steps(for destination: DistributionTarget) -> [PublishStep] {
-        [
+    ///
+    /// `checkoutBranch` is prepended only when the run pinned a git branch — a
+    /// publish that builds the working copy as-is shows no checkout step at all.
+    static func steps(for destination: DistributionTarget, branchSelected: Bool = false) -> [PublishStep] {
+        (branchSelected ? [.checkoutBranch] : []) + [
             .validate, .writeXcconfig, .generateExportOptions,
             .archive, .exportIPA, .upload,
         ]
@@ -35,6 +39,7 @@ enum PublishStep: String, CaseIterable, Identifiable, Hashable {
 
     var systemImage: String {
         switch self {
+        case .checkoutBranch: return "arrow.triangle.branch"
         case .validate: return "checkmark.shield"
         case .writeXcconfig: return "doc.text"
         case .generateExportOptions: return "list.bullet.rectangle"
