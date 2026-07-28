@@ -44,6 +44,7 @@ SOURCES = [
     ("Services/ProjectStore.swift", "Services"),
     ("Services/ProjectInspector.swift", "Services"),
     ("Services/GitChangeInspector.swift", "Services"),
+    ("Services/GitBranchInspector.swift", "Services"),
     ("Views/ContentView.swift", "Views"),
     ("Views/ProjectListView.swift", "Views"),
     ("Views/ProjectEditorView.swift", "Views"),
