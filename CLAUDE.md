@@ -91,6 +91,13 @@ Casks/flightkit.rb              Homebrew cask (auto-bumped by CI)
   Nothing is stashed or forced: a dirty tree is only *warned* about, and a checkout
   git refuses fails the step with git's own message. Not picking = old behaviour
   (build the working copy as-is, no checkout step listed).
+  With `AppSettings.branchPullOnCheckout` (Settings → Git branch, **on** by default)
+  the step also updates the branch: `fetch --prune` → checkout → `pull --ff-only`.
+  Fast-forward only — a diverged local branch fails the step rather than being merged
+  or rebased silently; a branch with no upstream skips the pull; a failed fetch only
+  warns. Off = checkout only (offline, or shipping a deliberately older commit). The
+  picker's ⟳ fetches too; the automatic load stays offline so opening a project never
+  waits on the network.
 - **App Store destination** = TestFlight upload **plus** auto-attaching the
   processed build to an App Store version (created if missing) once processing
   reaches VALID — done in the background watch, so it only completes if the screen

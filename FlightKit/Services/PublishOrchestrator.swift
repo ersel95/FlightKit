@@ -129,9 +129,20 @@ final class PublishOrchestrator {
     /// left on that branch afterwards (a batch's next environment checks out its own),
     /// so what was built stays inspectable. A checkout git refuses — typically local
     /// modifications that would be overwritten — fails the step with git's own message.
+    ///
+    /// Unless switched off in Settings, the branch is also brought up to date
+    /// (`fetch --prune` + `pull --ff-only`) so the package is built from what the
+    /// remote actually has rather than a stale local checkout.
     private func checkoutBranch() async throws {
         guard let branch = state.targetBranch else { return }
-        let outcome = try await GitBranchInspector.checkout(branch, repoDir: workspaceRoot)
+        let outcome = try await GitBranchInspector.checkout(
+            branch,
+            repoDir: workspaceRoot,
+            pull: AppSettings.branchPullOnCheckout
+        )
+        for note in outcome.updateNotes {
+            state.appendLog(note, kind: note.hasPrefix("⚠︎") ? .fix : .info)
+        }
         if let previous = outcome.previousBranch, previous != branch {
             state.appendLog("Branch: \(previous) → \(branch)", kind: .info)
         } else {
