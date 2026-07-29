@@ -30,6 +30,9 @@ struct GitCheckoutOutcome: Sendable {
     /// Git carries compatible modifications across the switch, so this is a warning,
     /// not a failure — the build may not be a pristine copy of the branch.
     let dirtyPaths: [String]
+    /// What the update pass did (fetch/pull), ready to log. Empty when updating is
+    /// switched off in Settings.
+    let updateNotes: [String]
 }
 
 /// Reads and switches the branch of a project's git repository, so a publish can
@@ -40,12 +43,20 @@ enum GitBranchInspector {
     enum BranchError: LocalizedError {
         case notARepo(URL)
         case checkoutFailed(branch: String, log: String)
+        case pullFailed(branch: String, log: String)
         var errorDescription: String? {
             switch self {
             case .notARepo(let url):
                 return "Bu klasör bir git deposu değil: \(url.path)"
             case .checkoutFailed(let branch, let log):
                 return "'\(branch)' branch'ine geçilemedi.\n\(log.suffix(600))"
+            case .pullFailed(let branch, let log):
+                return """
+                '\(branch)' branch'i güncellenemedi (git pull --ff-only).
+                Lokal branch uzaktan ıraksamış olabilir ya da ağ/kimlik doğrulama sorunu vardır. \
+                Elle çözün veya Ayarlar'dan "Branch'i yayından önce güncelle" seçeneğini kapatın.
+                \(log.suffix(600))
+                """
             }
         }
     }
@@ -62,6 +73,15 @@ enum GitBranchInspector {
               result.exitCode == 0 else { return nil }
         let name = result.combinedLog.trimmingCharacters(in: .whitespacesAndNewlines)
         return (name.isEmpty || name == "HEAD") ? nil : name
+    }
+
+    /// `git fetch --prune`, so a branch created elsewhere becomes pickable. Returns
+    /// whether it succeeded — the caller only refreshes a list, so being offline is
+    /// not worth an error.
+    @discardableResult
+    static func fetch(repoDir: URL) async -> Bool {
+        let result = try? await git(repoDir, ["fetch", "--prune"])
+        return result?.exitCode == 0
     }
 
     /// Every branch the user can pick: local branches plus already-fetched remote
@@ -98,15 +118,31 @@ enum GitBranchInspector {
         return out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Switches the working copy to `branch`. Already being on it is a no-op that
-    /// still reports HEAD. A dirty tree is *not* pre-blocked: git carries harmless
-    /// modifications across and refuses only when the switch would overwrite them —
-    /// in which case git's own message is surfaced verbatim, which is the actionable
-    /// one ("commit or stash …").
-    static func checkout(_ branch: String, repoDir: URL) async throws -> GitCheckoutOutcome {
+    /// Switches the working copy to `branch`, optionally bringing it up to date
+    /// first. Already being on it is a no-op that still reports HEAD. A dirty tree
+    /// is *not* pre-blocked: git carries harmless modifications across and refuses
+    /// only when the switch would overwrite them — in which case git's own message
+    /// is surfaced verbatim, which is the actionable one ("commit or stash …").
+    ///
+    /// With `pull` on (the Settings default) the sequence is `fetch --prune` →
+    /// `checkout` → `pull --ff-only`. Fast-forward only, so a diverged local branch
+    /// fails the step instead of being merged or rebased behind the user's back; a
+    /// branch with no upstream simply skips the pull. A failed fetch is only a
+    /// warning — the pull that follows reports the real problem.
+    static func checkout(_ branch: String, repoDir: URL, pull: Bool = false) async throws -> GitCheckoutOutcome {
         guard await isRepository(repoDir) else { throw BranchError.notARepo(repoDir) }
         let previous = await currentBranch(repoDir: repoDir)
         let dirty = await dirtyPaths(repoDir: repoDir)
+        var notes: [String] = []
+
+        // Fetch before checking out: a branch that only exists on the remote can
+        // then be resolved, and the local ref is fresh for the pull below.
+        if pull {
+            let fetch = try await git(repoDir, ["fetch", "--prune"])
+            notes.append(fetch.exitCode == 0
+                         ? "git fetch --prune tamam"
+                         : "⚠︎ git fetch başarısız (exit \(fetch.exitCode)) — lokal ref'lerle devam ediliyor")
+        }
 
         if previous != branch {
             let result = try await git(repoDir, ["checkout", branch])
@@ -114,13 +150,38 @@ enum GitBranchInspector {
                 throw BranchError.checkoutFailed(branch: branch, log: result.combinedLog)
             }
         }
+
+        if pull {
+            if await hasUpstream(repoDir: repoDir) {
+                let result = try await git(repoDir, ["pull", "--ff-only"])
+                guard result.exitCode == 0 else {
+                    throw BranchError.pullFailed(branch: branch, log: result.combinedLog)
+                }
+                let summary = result.combinedLog
+                    .split(whereSeparator: { $0.isNewline })
+                    .map { String($0).trimmingCharacters(in: .whitespaces) }
+                    .last(where: { !$0.isEmpty }) ?? "tamam"
+                notes.append("git pull --ff-only: \(summary)")
+            } else {
+                notes.append("'\(branch)' için upstream yok — pull atlandı")
+            }
+        }
+
         let head = try? await git(repoDir, ["log", "-1", "--pretty=%h %s"])
         return GitCheckoutOutcome(
             branch: branch,
             previousBranch: previous,
             headDescription: (head?.combinedLog ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-            dirtyPaths: dirty
+            dirtyPaths: dirty,
+            updateNotes: notes
         )
+    }
+
+    /// Whether the checked-out branch tracks a remote branch — pulling a purely
+    /// local branch has nothing to pull from and would fail.
+    private static func hasUpstream(repoDir: URL) async -> Bool {
+        let result = try? await git(repoDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        return result?.exitCode == 0
     }
 
     /// Paths with uncommitted changes (tracked or untracked), capped for logging.

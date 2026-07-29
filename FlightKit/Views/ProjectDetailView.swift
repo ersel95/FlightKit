@@ -42,6 +42,8 @@ struct ProjectDetailView: View {
     @AppStorage(AppSettings.testNoteManagedKey) private var testNoteManaged = true
     /// Whether one test note is shared across environments (vs. one each).
     @AppStorage(AppSettings.testNoteSharedKey) private var testNoteShared = true
+    /// Whether a picked branch is fetched + fast-forwarded before the archive.
+    @AppStorage(AppSettings.branchPullOnCheckoutKey) private var branchPullOnCheckout = true
     @State private var pipelineBatch: PipelineBatch?
     /// The environments the user has ticked, by name. Any subset is allowed
     /// (e.g. Test + Prod, or Test + UAT). Persisted per project across launches.
@@ -374,11 +376,11 @@ struct ProjectDetailView: View {
                     if isLoadingBranches {
                         ProgressView().controlSize(.small)
                     } else {
-                        Button { Task { await loadBranches() } } label: {
+                        Button { Task { await loadBranches(fetchFirst: true) } } label: {
                             Image(systemName: "arrow.clockwise")
                         }
                         .buttonStyle(.borderless)
-                        .help("Branch listesini yenile (uzak branch'ler için önce fetch/pull yapın)")
+                        .help("Branch listesini yenile (uzaktaki yeni branch'ler için fetch eder)")
                     }
                 }
                 ForEach(targetEnvironments) { env in
@@ -399,7 +401,9 @@ struct ProjectDetailView: View {
                         .frame(maxWidth: 280, alignment: .leading)
                     }
                 }
-                Text("Seçilen branch, o ortamın arşivi alınmadan hemen önce `git checkout` ile aktif edilir. Depo bu branch'te bırakılır; kaydedilmemiş değişiklikleriniz geçişi engellerse adım hata verir.")
+                Text(branchPullOnCheckout
+                     ? "Seçilen branch, o ortamın arşivi alınmadan hemen önce fetch edilip `git checkout` + `git pull --ff-only` ile güncellenir; paket uzaktaki son hâlden çıkar. Depo bu branch'te bırakılır. (Ayarlar'dan kapatılabilir.)"
+                     : "Seçilen branch, o ortamın arşivi alınmadan hemen önce `git checkout` ile aktif edilir — güncelleme yapılmaz, paket lokal kopyadan çıkar. Depo bu branch'te bırakılır.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .frame(maxWidth: 420, alignment: .leading)
             }
@@ -430,8 +434,10 @@ struct ProjectDetailView: View {
 
     /// Reads the repository's branches and current HEAD. Failure (not a repo, no
     /// git) simply hides the picker — a project that isn't in a repository keeps
-    /// publishing exactly as before.
-    private func loadBranches() async {
+    /// publishing exactly as before. `fetchFirst` (the manual ⟳) pulls in refs for
+    /// branches created elsewhere; the automatic load stays offline so opening a
+    /// project never waits on the network.
+    private func loadBranches(fetchFirst: Bool = false) async {
         isLoadingBranches = true
         defer { isLoadingBranches = false }
         let repo = project.workspaceRoot
@@ -442,6 +448,7 @@ struct ProjectDetailView: View {
             return
         }
         isGitRepo = true
+        if fetchFirst { await GitBranchInspector.fetch(repoDir: repo) }
         currentGitBranch = await GitBranchInspector.currentBranch(repoDir: repo)
         let branches = (try? await GitBranchInspector.branches(repoDir: repo)) ?? []
         repoBranches = branches

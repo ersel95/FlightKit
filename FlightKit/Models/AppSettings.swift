@@ -52,4 +52,15 @@ enum AppSettings {
     static var testNoteShared: Bool {
         UserDefaults.standard.object(forKey: testNoteSharedKey) as? Bool ?? true
     }
+
+    /// When `true` (the default), a run that pinned a git branch updates it before
+    /// archiving: `git fetch --prune`, then `git pull --ff-only` once the branch is
+    /// checked out — so the package is built from what the remote actually has.
+    /// Turn it off to build the local copy as it stands (offline, or to ship a
+    /// deliberately older commit).
+    static let branchPullOnCheckoutKey = "FlightKit.settings.branchPullOnCheckout"
+
+    static var branchPullOnCheckout: Bool {
+        UserDefaults.standard.object(forKey: branchPullOnCheckoutKey) as? Bool ?? true
+    }
 }

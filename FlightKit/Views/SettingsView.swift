@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.buildNumberSharedKey) private var buildNumberShared = true
     @AppStorage(AppSettings.testNoteManagedKey) private var testNoteManaged = true
     @AppStorage(AppSettings.testNoteSharedKey) private var testNoteShared = true
+    @AppStorage(AppSettings.branchPullOnCheckoutKey) private var branchPullOnCheckout = true
 
     var body: some View {
         Form {
@@ -58,6 +59,15 @@ struct SettingsView: View {
                 Text(testNoteShared
                      ? "Seçili tüm ortamlara aynı test notu yazılır."
                      : "Her seçili ortam için ayrı bir test notu girilir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Git branch") {
+                Toggle("Branch'i yayından önce güncelle", isOn: $branchPullOnCheckout)
+                Text(branchPullOnCheckout
+                     ? "Bir ortam için branch seçildiğinde arşivden önce `git fetch --prune` ve `git pull --ff-only` çalışır; paket uzaktaki son hâlden çıkar. Lokal branch ıraksamışsa adım hata verir (merge/rebase yapılmaz), upstream'i olmayan branch'lerde pull atlanır."
+                     : "Seçilen branch'e yalnızca geçilir (`git checkout`); güncelleme yapılmaz — paket lokal kopyadan çıkar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
